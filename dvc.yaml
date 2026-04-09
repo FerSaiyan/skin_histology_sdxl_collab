@@ -1,0 +1,124 @@
+stages:
+  fetch_histo_seg_manifest:
+    cmd: python scripts/download_mendeley_histoseg.py --dataset-id vccj8mp2cg --expected-version 2 --manifest-out data/metadata/histo_seg_manifest.json
+    deps:
+      - scripts/download_mendeley_histoseg.py
+      - params.yaml
+    outs:
+      - data/metadata/histo_seg_manifest.json
+    params:
+      - dataset.id
+      - dataset.expected_version
+      - dataset.manifest_json
+
+  download_histo_seg_dataset:
+    cmd: python scripts/download_mendeley_histoseg.py --manifest-in data/metadata/histo_seg_manifest.json --download --download-dir data/raw/histo_seg_v2 --skip-existing
+    deps:
+      - scripts/download_mendeley_histoseg.py
+      - params.yaml
+      - data/metadata/histo_seg_manifest.json
+    outs:
+      - data/raw/histo_seg_v2:
+          persist: true
+    params:
+      - dataset.download_dir
+
+  build_histoseg_pairs_csv:
+    cmd: python scripts/build_histoseg_pairs_csv.py --dataset-dir data/raw/histo_seg_v2 --output-csv data/processed/histoseg_pairs.csv --stats-json data/processed/histoseg_pairs_stats.json
+    deps:
+      - scripts/build_histoseg_pairs_csv.py
+      - params.yaml
+      - data/raw/histo_seg_v2
+    outs:
+      - data/processed/histoseg_pairs.csv
+      - data/processed/histoseg_pairs_stats.json
+    params:
+      - dataset.pairs_csv
+      - dataset.pairs_stats_json
+
+  render_runtime_configs:
+    cmd: python scripts/render_runtime_configs.py --params params.yaml --phase1-template configs/sdxl_lora_phase1_skin_histology.yaml --phase2-template configs/sdxl_lora_phase2_reward_skin_histology.yaml --phase3-template configs/sdxl_lora_phase3_morph_reward_skin_histology.yaml --phase1-out configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml --phase2-out configs/runtime/sdxl_lora_phase2_reward_skin_histology.runtime.yaml --phase3-out configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml --summary-out data/metadata/runtime_config_sync.json
+    deps:
+      - scripts/render_runtime_configs.py
+      - params.yaml
+      - configs/sdxl_lora_phase1_skin_histology.yaml
+      - configs/sdxl_lora_phase2_reward_skin_histology.yaml
+      - configs/sdxl_lora_phase3_morph_reward_skin_histology.yaml
+    outs:
+      - configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml
+      - configs/runtime/sdxl_lora_phase2_reward_skin_histology.runtime.yaml
+      - configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
+      - data/metadata/runtime_config_sync.json
+    params:
+      - models.sdxl_base_model
+      - models.classifier_checkpoint
+      - models.kohya_scripts_dir
+      - dataset.pairs_csv
+      - gradcam.output_dir
+      - pipeline.phase1_template
+      - pipeline.phase2_template
+      - pipeline.phase3_template
+      - pipeline.phase1_runtime
+      - pipeline.phase2_runtime
+      - pipeline.phase3_runtime
+
+  build_gradcam_masks_for_skin:
+    cmd: python scripts/run_gradcam_from_params.py --params params.yaml
+    deps:
+      - scripts/run_gradcam_from_params.py
+      - scripts/synthetic_data/build_roi_masks_gradcam.py
+      - params.yaml
+      - data/metadata/runtime_config_sync.json
+      - data/processed/histoseg_pairs.csv
+    outs:
+      - data/artifacts/roi_masks/histoseg_pairs:
+          cache: false
+    params:
+      - gradcam.csv
+      - gradcam.image_column
+      - gradcam.label_column
+      - gradcam.output_dir
+      - gradcam.model_config
+      - models.classifier_checkpoint
+
+  train_skin_lora_phase1:
+    cmd: python scripts/synthetic_data/finetune_stable_diffusion_unified.py --config configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml
+    deps:
+      - scripts/synthetic_data/finetune_stable_diffusion_unified.py
+      - params.yaml
+      - data/metadata/runtime_config_sync.json
+      - configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml
+      - data/artifacts/roi_masks/histoseg_pairs
+    outs:
+      - outputs/finetunes/skin_histology_phase1:
+          cache: false
+    params:
+      - pipeline.phase1_runtime
+
+  train_skin_lora_phase2:
+    cmd: python scripts/synthetic_data/phase2_reward_guided_lora.py --config configs/runtime/sdxl_lora_phase2_reward_skin_histology.runtime.yaml
+    deps:
+      - scripts/synthetic_data/phase2_reward_guided_lora.py
+      - params.yaml
+      - data/metadata/runtime_config_sync.json
+      - configs/runtime/sdxl_lora_phase2_reward_skin_histology.runtime.yaml
+      - outputs/finetunes/skin_histology_phase1
+    outs:
+      - outputs/finetunes/skin_histology_phase2_reward/run1:
+          cache: false
+    params:
+      - pipeline.phase2_runtime
+
+  train_skin_lora_phase3:
+    cmd: python scripts/synthetic_data/phase3_morph_reward_guided_lora.py --config configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
+    deps:
+      - scripts/synthetic_data/phase3_morph_reward_guided_lora.py
+      - params.yaml
+      - data/metadata/runtime_config_sync.json
+      - configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
+      - outputs/finetunes/skin_histology_phase2_reward/run1
+    outs:
+      - outputs/finetunes/skin_histology_phase3_morph_reward/run1:
+          cache: false
+    params:
+      - pipeline.phase3_runtime

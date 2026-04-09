@@ -1,0 +1,95 @@
+project_path: null
+python_exec: python
+
+base_train_config: configs/sdxl_lora_phase1_skin_histology.yaml
+
+# Default continuation checkpoint from Phase 1.
+initial_lora_weights: outputs/finetunes/skin_histology_phase1/last.safetensors
+
+phase2_mode: inpaint
+work_dir: outputs/finetunes/skin_histology_phase2_reward/run1
+
+cycles: 6
+steps_per_cycle: 1000
+save_every_n_steps: 250
+sample_every_n_steps_override: 250
+selector_include_last_checkpoint: false
+lora_dim_from_weights: true
+
+cycle_seed_mode: incremental
+cycle_seed_base: 700
+cycle_seed_step: 1
+
+revert_on_drop: true
+improvement_epsilon: 0.0001
+patience: 0
+
+force_materialize_from_labels_csv: true
+
+train_overrides:
+  use_existing_dataset_captions: false
+  labels_csv_path: data/processed/histoseg_pairs.csv
+  label_column: coarse_label
+  prepare_latents_mixed_precision: "no"
+  latent_batch_size: 2
+  prepare_latents_nan_retries: 0
+  prepare_latents_nan_quarantine_dir: null
+  train_batch_size: 1
+  gradient_accumulation_steps: 4
+  resolution: "512,512"
+
+text2image_train_overrides:
+  lora_use_masked_loss: false
+  sample_init_image: null
+  sample_mask_image: null
+  sample_denoising_strength: null
+
+inpaint_train_overrides:
+  lora_use_masked_loss: true
+  lora_mask_dir: data/artifacts/roi_masks/histoseg_pairs
+  sample_denoising_strength: 0.55
+  sample_mask_strength: 0.8
+  sample_mask_blur_radius: 6.0
+
+selector:
+  base_model: /absolute/path/to/sd_xl_base_1.0.safetensors
+  is_sdxl: true
+  label_col: coarse_label
+  labels_csv: data/processed/histoseg_pairs.csv
+  mask_dir: data/artifacts/roi_masks/histoseg_pairs
+
+  # Replace with your histology classifier and study config.
+  classifier_ckpt: /absolute/path/to/your/histology_classifier.pth
+  classifier_study_config: configs/studies/uni_effnet_imagenet_ar.yaml
+
+  generation_device: cuda
+  classifier_device: cuda
+  batch_size: 32
+
+  images_per_class: 6
+  max_sources: 0
+  steps: 35
+  guidance_scale: 5.0
+  strength: 0.55
+  same_class_strength: 0.55
+  cross_class_strength: 0.75
+  lora_scale: 0.75
+  negative_prompt: "lowres,blurry,artifact"
+  width: 512
+  height: 512
+  mask_feather_radius: 6.0
+  same_class_mask_dilate_px: 0.0
+  cross_class_mask_dilate_px: 4.0
+  seed_base: 222
+
+  prompt_template: "H&E skin histology slide, tissue pattern: {token}{descriptor_suffix}"
+  tokens: non_cancer,cancer
+  descriptors_json:
+    non_cancer: "normal skin tissue architecture, preserved stratification"
+    cancer: "malignant skin histology pattern with dysplastic morphology"
+
+  cross_class_weight: 0.75
+  same_class_weight: 0.25
+  reuse_selected_sources_across_cycles: true
+  exclude_last: false
+  max_checkpoints: 0

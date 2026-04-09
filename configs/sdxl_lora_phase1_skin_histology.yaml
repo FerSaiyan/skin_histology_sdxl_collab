@@ -1,0 +1,79 @@
+project_path: null
+training_mode: lora
+is_sdxl: true
+seed_name: "42"
+fold_number: "1"
+dataset_subdir: null
+
+# Set this path before training.
+base_model_path: /absolute/path/to/sd_xl_base_1.0.safetensors
+
+labels_csv_path: data/processed/histoseg_pairs.csv
+label_column: coarse_label
+materialize_from_labels_csv: true
+kohya_scripts_dir: null
+
+resolution: "512,512"
+train_batch_size: 1
+gradient_accumulation_steps: 4
+dataset_repeats: 1
+sample_every_n_steps: 200
+sample_sampler: "ddim"
+sample_steps: 35
+sample_guidance_scale: 5.0
+sample_negative_prompt: "lowres,blurry,artifact"
+sample_prompt_template: "H&E skin histology slide, tissue pattern: {token}{descriptor_suffix}"
+sample_prompts_per_class: 3
+sample_use_class_descriptors: true
+sample_class_descriptors:
+  non_cancer: "normal skin tissue architecture, preserved stratification"
+  cancer: "malignant skin histology pattern with dysplastic morphology"
+sample_seed_mode: "per_class"
+sample_seed_base: 222
+sample_init_image: null
+sample_mask_image: null
+sample_denoising_strength: null
+sample_mask_strength: 0.8
+sample_mask_blur_radius: 6.0
+
+max_train_epochs: 30
+lr_warmup_steps: 200
+save_every_n_epochs: 5
+noise_offset: 0.05
+optimizer_type: "AdamW8bit"
+gradient_checkpointing: true
+min_snr_gamma: 5
+lr_scheduler: "constant_with_warmup"
+mixed_precision: "fp16"
+attn_backend: "sdpa"
+seed: 222
+
+caption_template: "H&E skin histology slide, tissue pattern: {token}{descriptor_suffix}"
+caption_use_class_descriptors: true
+caption_class_descriptors:
+  non_cancer: "normal skin tissue architecture, preserved stratification"
+  cancer: "malignant skin histology pattern with dysplastic morphology"
+
+lora_rank: 8
+lora_alpha: 8
+lora_lr: 5e-5
+lora_train_text_encoder: false
+lora_train_unet_only: true
+lora_te_only: false
+extra_train_args:
+  - --cache_latents
+  - --cache_latents_to_disk
+  - --cache_text_encoder_outputs
+  - --cache_text_encoder_outputs_to_disk
+
+lora_use_masked_loss: true
+lora_mask_dir: data/artifacts/roi_masks/histoseg_pairs
+lora_mask_feather_radius: 6.0
+lora_mask_strength: 0.8
+lora_mask_processed_dir: null
+
+output_dir: outputs/finetunes/skin_histology_phase1
+logs_dir: outputs/logs/skin_histology_phase1
+
+mlflow_experiment: skin_histology_sdxl_phase1
+wandb_api_key: null

@@ -1,0 +1,10 @@
+# Local data and heavy artifacts
+data/
+outputs/
+mlruns/
+logs/
+
+# Python / notebooks
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

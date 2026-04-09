@@ -1,0 +1,32 @@
+dataset:
+  id: vccj8mp2cg
+  expected_version: 2
+  manifest_json: data/metadata/histo_seg_manifest.json
+  download_dir: data/raw/histo_seg_v2
+  pairs_csv: data/processed/histoseg_pairs.csv
+  pairs_stats_json: data/processed/histoseg_pairs_stats.json
+
+models:
+  sdxl_base_model: /absolute/path/to/sd_xl_base_1.0.safetensors
+  classifier_checkpoint: /absolute/path/to/your/histology_classifier.pth
+  kohya_scripts_dir: /home/fertroll10/Documents/ML/SUS_scraper/oral_lesions_project/kohya_ss/sd-scripts
+
+gradcam:
+  csv: data/processed/histoseg_pairs.csv
+  image_column: image_path
+  label_column: coarse_label
+  output_dir: data/artifacts/roi_masks/histoseg_pairs
+  model_config: configs/studies/uni_effnet_imagenet_ar.yaml
+  gradcam_layer: enet.conv_head
+  img_size: 384
+  threshold_quantile: 0.85
+  dilate_radius: 9
+  device: cuda:0
+
+pipeline:
+  phase1_template: configs/sdxl_lora_phase1_skin_histology.yaml
+  phase2_template: configs/sdxl_lora_phase2_reward_skin_histology.yaml
+  phase3_template: configs/sdxl_lora_phase3_morph_reward_skin_histology.yaml
+  phase1_runtime: configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml
+  phase2_runtime: configs/runtime/sdxl_lora_phase2_reward_skin_histology.runtime.yaml
+  phase3_runtime: configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
