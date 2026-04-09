@@ -155,15 +155,29 @@ def main() -> None:
         slice_id = row["slice_id"]
         img_path = image_dir / row["filename"]
 
-        mask_filename = row["mask_filename"]
-        mask_path = mask_dir / mask_filename
+        mask_filename = str(row.get("mask_filename", ""))
+        mask_path = mask_dir / mask_filename if mask_filename else None
+
+        # Grad-CAM masks are usually saved with source image basename (e.g., .jpg).
+        if mask_path is None or not mask_path.exists():
+            fallback_name = str(row.get("filename", ""))
+            fallback_path = mask_dir / fallback_name if fallback_name else None
+            if fallback_path and fallback_path.exists():
+                mask_path = fallback_path
+            elif fallback_name:
+                stem = Path(fallback_name).stem
+                for ext in [".jpg", ".png", ".jpeg"]:
+                    cand = mask_dir / f"{stem}{ext}"
+                    if cand.exists():
+                        mask_path = cand
+                        break
 
         if not img_path.exists():
             print(f"[WARN] Image not found: {img_path}")
             continue
 
-        if not mask_path.exists():
-            print(f"[WARN] Mask not found: {mask_path}")
+        if mask_path is None or not mask_path.exists():
+            print(f"[WARN] Mask not found for {slice_id}")
             continue
 
         print(f"[{idx+1}/{len(df)}] Processing {slice_id}")

@@ -109,19 +109,19 @@ stages:
     params:
       - pipeline.phase2_runtime
 
-train_skin_lora_phase3:
-  cmd: python scripts/synthetic_data/phase3_morph_reward_guided_lora.py --config configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
-  deps:
-    - scripts/synthetic_data/phase3_morph_reward_guided_lora.py
-    - params.yaml
-    - data/metadata/runtime_config_sync.json
-    - configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
-    - outputs/finetunes/skin_histology_phase2_reward/run1
-  outs:
-    - outputs/finetunes/skin_histology_phase3_morph_reward/run1:
-        cache: false
-  params:
-    - pipeline.phase3_runtime
+  train_skin_lora_phase3:
+    cmd: python scripts/synthetic_data/phase3_morph_reward_guided_lora.py --config configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
+    deps:
+      - scripts/synthetic_data/phase3_morph_reward_guided_lora.py
+      - params.yaml
+      - data/metadata/runtime_config_sync.json
+      - configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
+      - outputs/finetunes/skin_histology_phase2_reward/run1
+    outs:
+      - outputs/finetunes/skin_histology_phase3_morph_reward/run1:
+          cache: false
+    params:
+      - pipeline.phase3_runtime
 
   # Patch workflow stages (optional, for large-slide editing)
 
@@ -140,7 +140,7 @@ train_skin_lora_phase3:
       - data/artifacts/patches/metadata/patches_metadata.csv
 
   inpaint_roi_patches:
-    cmd: python scripts/patches/inpaint_roi_patches.py --metadata-csv data/artifacts/patches/metadata/patches_metadata.csv --output-dir data/artifacts/inpainted --base-model ${SDXL_BASE_MODEL} --lora-weights ${LORA_WEIGHTS} --dry-run
+    cmd: python scripts/patches/inpaint_roi_patches.py --metadata-csv data/artifacts/patches/metadata/patches_metadata.csv --output-dir data/artifacts/inpainted --base-model /home/fertroll10/Documents/ML/SUS_scraper/pretrained_models/sd_xl_base_1.0.safetensors --lora-weights outputs/finetunes/skin_histology_phase1/last.safetensors --dry-run
     deps:
       - scripts/patches/inpaint_roi_patches.py
       - data/artifacts/patches/metadata/patches_metadata.csv

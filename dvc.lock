@@ -36,33 +36,34 @@ stages:
     deps:
     - path: configs/sdxl_lora_phase1_skin_histology.yaml
       hash: md5
-      md5: 440c7e91225e363881c1253673ade893
-      size: 2234
+      md5: 5162bc7f355ed8cd3b08a598400fec92
+      size: 2110
     - path: configs/sdxl_lora_phase2_reward_skin_histology.yaml
       hash: md5
-      md5: 6d3a31ec5e7279f78ae523162e7fc57e
-      size: 2618
+      md5: e17784d630dcad9041f81874f0fdb0f2
+      size: 2611
     - path: configs/sdxl_lora_phase3_morph_reward_skin_histology.yaml
       hash: md5
-      md5: 9352cb594484f04cdd73adb7a45da99d
-      size: 2743
+      md5: 503bc239374d2cf6a21b8713074becb8
+      size: 2736
     - path: params.yaml
       hash: md5
-      md5: d9563f8ef8b8b4da67a9191c0b6865e2
-      size: 1311
+      md5: 02fe780bb0af9adcd669833d7ad87239
+      size: 1506
     - path: scripts/render_runtime_configs.py
       hash: md5
       md5: df81eed07f52a401338f13b9cd6c356e
       size: 4862
     params:
       params.yaml:
-        dataset.pairs_csv: data/processed/histoseg_pairs.csv
-        gradcam.output_dir: data/artifacts/roi_masks/histoseg_pairs
+        dataset.pairs_csv: data/processed/histoseg_patch_pairs.csv
+        gradcam.output_dir: data/artifacts/patches/masks
         models.classifier_checkpoint: 
-          /absolute/path/to/your/histology_classifier.pth
+          outputs/classifiers/histoseg_effnet_b0_binary.pth
         models.kohya_scripts_dir: 
           /home/fertroll10/Documents/ML/SUS_scraper/oral_lesions_project/kohya_ss/sd-scripts
-        models.sdxl_base_model: /absolute/path/to/sd_xl_base_1.0.safetensors
+        models.sdxl_base_model: 
+          /home/fertroll10/Documents/ML/SUS_scraper/pretrained_models/sd_xl_base_1.0.safetensors
         pipeline.phase1_runtime: 
           configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml
         pipeline.phase1_template: configs/sdxl_lora_phase1_skin_histology.yaml
@@ -77,21 +78,21 @@ stages:
     outs:
     - path: configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml
       hash: md5
-      md5: e387868a2a2771c7fc1928fc991cf19f
-      size: 2238
+      md5: 0ce7c8906445c0233a08db3c04b115ed
+      size: 2164
     - path: configs/runtime/sdxl_lora_phase2_reward_skin_histology.runtime.yaml
       hash: md5
-      md5: e94602c28267b11640ca51a9eef889f6
-      size: 2501
+      md5: df95e97c012799030f044daceecc725d
+      size: 2538
     - path: 
         configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
       hash: md5
-      md5: fa4c42507eff3a111b7be534249f5475
-      size: 2690
+      md5: ea6a238442f2ff87a8f72f95db6e9013
+      size: 2727
     - path: data/metadata/runtime_config_sync.json
       hash: md5
-      md5: fafc4befb4692fa2307e9a84612bccb4
-      size: 739
+      md5: 3f95ac97fb2bdbf9c2f42e93ec423c57
+      size: 781
   download_histo_seg_dataset:
     cmd: python scripts/download_mendeley_histoseg.py --manifest-in 
       data/metadata/histo_seg_manifest.json --download --download-dir 

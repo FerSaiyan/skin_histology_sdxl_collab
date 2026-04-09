@@ -36,6 +36,7 @@ import json
 import math
 import os
 import sys
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
@@ -45,6 +46,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image, ImageOps
+
+Image.MAX_IMAGE_PIXELS = None
+warnings.filterwarnings("ignore", category=Image.DecompressionBombWarning)
 
 # Ensure repo root (with `src/`) is on sys.path so `src.oral_lesions...`
 # imports work even when this script is invoked from scripts/.

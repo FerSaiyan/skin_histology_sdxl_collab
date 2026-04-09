@@ -28,7 +28,7 @@ force_materialize_from_labels_csv: true
 
 train_overrides:
   use_existing_dataset_captions: false
-  labels_csv_path: data/processed/histoseg_pairs.csv
+  labels_csv_path: data/processed/histoseg_patch_pairs.csv
   label_column: coarse_label
   prepare_latents_mixed_precision: "no"
   latent_batch_size: 2
@@ -46,7 +46,7 @@ text2image_train_overrides:
 
 inpaint_train_overrides:
   lora_use_masked_loss: true
-  lora_mask_dir: data/artifacts/roi_masks/histoseg_pairs
+  lora_mask_dir: data/artifacts/patches/masks
   sample_denoising_strength: 0.55
   sample_mask_strength: 0.8
   sample_mask_blur_radius: 6.0
@@ -55,12 +55,12 @@ selector:
   base_model: /absolute/path/to/sd_xl_base_1.0.safetensors
   is_sdxl: true
   label_col: coarse_label
-  labels_csv: data/processed/histoseg_pairs.csv
-  mask_dir: data/artifacts/roi_masks/histoseg_pairs
+  labels_csv: data/processed/histoseg_patch_pairs.csv
+  mask_dir: data/artifacts/patches/masks
 
   # Replace with your histology classifier and study config.
   classifier_ckpt: /absolute/path/to/your/histology_classifier.pth
-  classifier_study_config: configs/studies/uni_effnet_imagenet_ar.yaml
+  classifier_study_config: configs/studies/histoseg_effnet_b0_binary.yaml
 
   generation_device: cuda
   classifier_device: cuda

@@ -1,0 +1,12 @@
+study:
+  seed: 42
+  device: "cuda:0"
+  dataset_variant: "histoseg_binary"
+  resize_mode: "preserve"
+
+models:
+  - name: effnet_b0_histoseg_binary
+    model_type: effnet
+    enet_backbone: "tf_efficientnet-b0_ns"
+    pretrained_source: imagenet
+    img_size: 384

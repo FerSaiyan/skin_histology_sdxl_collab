@@ -3,20 +3,20 @@ dataset:
   expected_version: 2
   manifest_json: data/metadata/histo_seg_manifest.json
   download_dir: data/raw/histo_seg_v2
-  pairs_csv: data/processed/histoseg_pairs.csv
+  pairs_csv: data/processed/histoseg_patch_pairs.csv
   pairs_stats_json: data/processed/histoseg_pairs_stats.json
 
 models:
   sdxl_base_model: /home/fertroll10/Documents/ML/SUS_scraper/pretrained_models/sd_xl_base_1.0.safetensors
-  classifier_checkpoint: /absolute/path/to/your/histology_classifier.pth
+  classifier_checkpoint: outputs/classifiers/histoseg_effnet_b0_binary.pth
   kohya_scripts_dir: /home/fertroll10/Documents/ML/SUS_scraper/oral_lesions_project/kohya_ss/sd-scripts
 
 gradcam:
   csv: data/processed/histoseg_pairs.csv
   image_column: image_path
   label_column: coarse_label
-  output_dir: data/artifacts/roi_masks/histoseg_pairs
-  model_config: configs/studies/uni_effnet_imagenet_ar.yaml
+  output_dir: data/artifacts/patches/masks
+  model_config: configs/studies/histoseg_effnet_b0_binary.yaml
   gradcam_layer: enet.conv_head
   img_size: 384
   threshold_quantile: 0.85

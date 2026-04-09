@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 # Unified Stable Diffusion finetune script (full finetune / LoRA) with .env, YAML config, MLflow tracking
 
-import os, sys, subprocess, argparse, csv, json, shutil
+import os, sys, subprocess, argparse, csv, json, shutil, warnings
 from pathlib import Path
 import unicodedata as ud
 from unidecode import unidecode
 import re
 import numpy as np
 from PIL import Image, ImageFilter
+Image.MAX_IMAGE_PIXELS = None
+warnings.filterwarnings("ignore", category=Image.DecompressionBombWarning)
 _ws_re = re.compile(r"\s+")
 
 # Make src importable and load .env

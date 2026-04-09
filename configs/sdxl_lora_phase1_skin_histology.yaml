@@ -8,7 +8,7 @@ dataset_subdir: null
 # Set this path before training.
 base_model_path: /absolute/path/to/sd_xl_base_1.0.safetensors
 
-labels_csv_path: data/processed/histoseg_pairs.csv
+labels_csv_path: data/processed/histoseg_patch_pairs.csv
 label_column: coarse_label
 materialize_from_labels_csv: true
 kohya_scripts_dir: null
@@ -60,14 +60,10 @@ lora_lr: 5e-5
 lora_train_text_encoder: false
 lora_train_unet_only: true
 lora_te_only: false
-extra_train_args:
-  - --cache_latents
-  - --cache_latents_to_disk
-  - --cache_text_encoder_outputs
-  - --cache_text_encoder_outputs_to_disk
+extra_train_args: []
 
 lora_use_masked_loss: true
-lora_mask_dir: data/artifacts/roi_masks/histoseg_pairs
+lora_mask_dir: data/artifacts/patches/masks
 lora_mask_feather_radius: 6.0
 lora_mask_strength: 0.8
 lora_mask_processed_dir: null
