@@ -7,7 +7,7 @@ dataset:
   pairs_stats_json: data/processed/histoseg_pairs_stats.json
 
 models:
-  sdxl_base_model: /absolute/path/to/sd_xl_base_1.0.safetensors
+  sdxl_base_model: /home/fertroll10/Documents/ML/SUS_scraper/pretrained_models/sd_xl_base_1.0.safetensors
   classifier_checkpoint: /absolute/path/to/your/histology_classifier.pth
   kohya_scripts_dir: /home/fertroll10/Documents/ML/SUS_scraper/oral_lesions_project/kohya_ss/sd-scripts
 

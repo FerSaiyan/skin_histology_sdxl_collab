@@ -73,6 +73,285 @@ Validation requirement:
 
 ---
 
+## 4.5) Classifier Training (Required Before Phase C)
+
+Before running Grad-CAM or Phase 2/3, you need a binary histology classifier.
+
+### Recommended approaches (in order):
+
+#### Option 1: Transfer learning with ConvNeXt (simplest)
+
+ConvNeXt is a CNN-style architecture with strong Grad-CAM support and good transfer learning performance.
+
+**Architecture:** ConvNeXt-Tiny or Small (via `timm`)
+
+**Training recipe:**
+```python
+# Stage A: Freeze backbone, train head (5-10 epochs)
+# Stage B: Unfreeze last stage (20-30 epochs)
+
+# Hyperparameters:
+- Optimizer: AdamW
+- Head LR: 3e-4
+- Backbone LR: 1e-5
+- Weight decay: 1e-4
+- Batch size: 16-32 (as VRAM allows)
+- Mixed precision: fp16
+
+# Augmentations (pathology-safe):
+- Horizontal/vertical flips
+- 90-degree rotations
+- Mild brightness/contrast (±20%)
+- Mild hue/saturation (±10%)
+- Gaussian blur (σ=0.5-1.0)
+- Stain augmentation (optional)
+
+# Class balancing:
+- Weighted cross-entropy
+- Weighted sampler (50/50 cancer/non_cancer per batch)
+```
+
+**Implementation using oral-lesions infrastructure:**
+```bash
+# From oral_lesions_project, adapt run_optuna_study.py
+python scripts/run_optuna_study.py \
+  --config configs/studies/convnext_skin_histology.yaml \
+  --n-trials 1
+```
+
+#### Option 2: UNI foundation model (best for histopathology)
+
+UNI is a pathology-specific foundation model pretrained on 100M+ histopathology tiles.
+
+**Steps:**
+1. Request UNI weights: https://github.com/mahmoodlab/UNI
+2. Use as frozen feature extractor first
+3. Fine-tune last transformer blocks
+
+**Architecture:** ViT-Large (UNI pretrained)
+
+**Training recipe:**
+```python
+# Stage A: Freeze encoder, train linear head (5-10 epochs)
+# Stage B: Unfreeze last 2 transformer blocks (20-30 epochs)
+
+# Hyperparameters:
+- Optimizer: AdamW
+- Head LR: 3e-4
+- Backbone LR: 1e-5
+- Batch size: 8-16 (UNI is memory-intensive)
+- Mixed precision: bf16 preferred
+
+# Grad-CAM for ViT:
+- Use pytorch-grad-cam with reshape transform
+- Target layer: before final transformer block
+```
+
+**Implementation using TRIDENT:**
+```bash
+# TRIDENT supports UNI and other pathology encoders
+# See: https://github.com/mahmoodlab/TRIDENT
+python scripts/run_with_uni.py \
+  --encoder uni \
+  --data-csv data/processed/histoseg_pairs.csv \
+  --output-dir outputs/classifiers/uni
+```
+
+### Training data preparation:
+
+For both options, prepare patch-level dataset:
+
+1. **Extract patches from WSI slices:**
+   - Use segmentation masks to sample patches
+   - Patch size: 256×256 at 20x magnification
+   - Label by majority class (>60% of patch area)
+
+2. **Split by volume (NOT by patch):**
+   - Train: 70% of volumes
+   - Val: 15% of volumes
+   - Test: 15% of volumes
+   - **NEVER** split by patch alone (data leakage)
+
+3. **Binary labels:**
+   - `cancer`: if any cancer class (BCC/SCC/IEC) in patch
+   - `non_cancer`: otherwise
+
+### Quick-start script (using oral-lesions infrastructure):
+
+Create `scripts/train_histology_classifier.py`:
+
+```python
+#!/usr/bin/env python
+"""Train binary histology classifier using oral-lesions infrastructure."""
+
+import sys
+from pathlib import Path
+
+# Add oral-lesions project to path
+sys.path.insert(0, "/home/fertroll10/Documents/ML/SUS_scraper/oral_lesions_project")
+
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, WeightedRandomSampler
+from torchvision import transforms
+import timm
+from PIL import Image
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import GroupShuffleSplit
+
+# Dataset
+class HistologyPatchDataset(torch.utils.data.Dataset):
+    def __init__(self, csv_path, img_dir, transform=None):
+        self.df = pd.read_csv(csv_path)
+        self.img_dir = Path(img_dir)
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        img_path = self.img_dir / row['filename']
+        img = Image.open(img_path).convert('RGB')
+        label = 1 if row['coarse_label'] == 'cancer' else 0
+
+        if self.transform:
+            img = self.transform(img)
+
+        return img, label, row['volume_id']
+
+# Transforms
+train_transform = transforms.Compose([
+    transforms.Resize(256),
+    transforms.RandomCrop(224),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomVerticalFlip(),
+    transforms.RandomRotation(90),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+val_transform = transforms.Compose([
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+def train_classifier(csv_path, img_dir, output_path, epochs=30):
+    # Load data
+    df = pd.read_csv(csv_path)
+
+    # Split by volume
+    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    train_idx, val_idx = next(gss.split(df, groups=df['volume_id']))
+
+    train_df = df.iloc[train_idx]
+    val_df = df.iloc[val_idx]
+
+    # Save splits
+    train_df.to_csv(csv_path.replace('.csv', '_train.csv'), index=False)
+    val_df.to_csv(csv_path.replace('.csv', '_val.csv'), index=False)
+
+    # Create datasets
+    train_dataset = HistologyPatchDataset(csv_path.replace('.csv', '_train.csv'), img_dir, train_transform)
+    val_dataset = HistologyPatchDataset(csv_path.replace('.csv', '_val.csv'), img_dir, val_transform)
+
+    # Weighted sampler for class balance
+    train_labels = [1 if row['coarse_label'] == 'cancer' else 0 for _, row in train_df.iterrows()]
+    class_counts = np.bincount(train_labels)
+    weights = 1.0 / class_counts[train_labels]
+    sampler = WeightedRandomSampler(weights, len(weights))
+
+    train_loader = DataLoader(train_dataset, batch_size=16, sampler=sampler, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=4)
+
+    # Model
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = timm.create_model('convnext_tiny', pretrained=True, num_classes=2)
+    model = model.to(device)
+
+    # Freeze backbone initially
+    for param in model.parameters():
+        param.requires_grad = False
+    for param in model.head.parameters():
+        param.requires_grad = True
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW([
+        {'params': model.head.parameters(), 'lr': 3e-4},
+    ], weight_decay=1e-4)
+
+    # Training loop
+    best_acc = 0.0
+    for epoch in range(epochs):
+        # Unfreeze after 10 epochs
+        if epoch == 10:
+            for param in model.parameters():
+                param.requires_grad = True
+            optimizer = torch.optim.AdamW([
+                {'params': model.head.parameters(), 'lr': 3e-4},
+                {'params': model.stages.parameters(), 'lr': 1e-5}
+            ], weight_decay=1e-4)
+
+        model.train()
+        for batch_idx, (imgs, labels, _) in enumerate(train_loader):
+            imgs, labels = imgs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(imgs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+        # Validate
+        model.eval()
+        correct, total = 0, 0
+        with torch.no_grad():
+            for imgs, labels, _ in val_loader:
+                imgs, labels = imgs.to(device), labels.to(device)
+                outputs = model(imgs)
+                _, predicted = outputs.max(1)
+                total += labels.size(0)
+                correct += predicted.eq(labels).sum().item()
+
+        acc = correct / total
+        print(f'Epoch {epoch+1}/{epochs}, Val Acc: {acc:.4f}')
+
+        if acc > best_acc:
+            best_acc = acc
+            torch.save(model.state_dict(), output_path)
+
+    print(f'Best validation accuracy: {best_acc:.4f}')
+    return best_acc
+
+if __name__ == '__main__':
+    train_classifier(
+        csv_path='data/processed/histoseg_pairs.csv',
+        img_dir='data/raw/histo_seg_v2',
+        output_path='outputs/classifiers/convnext_histology.pth'
+    )
+```
+
+### Expected classifier performance:
+
+- Binary accuracy: 85-95%
+- Macro F1: 0.80-0.92
+- AUROC: 0.90-0.98
+
+### After training:
+
+1. Update `params.yaml`:
+   ```yaml
+   models:
+     classifier_checkpoint: outputs/classifiers/convnext_histology.pth
+   ```
+
+2. Proceed to Phase C (Grad-CAM).
+
+---
+
 ## 5) MVP Phases
 
 ## Phase A - Environment and configuration lock
