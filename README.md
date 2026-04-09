@@ -52,6 +52,10 @@ dvc repro download_histo_seg_dataset
 dvc repro build_histoseg_pairs_csv
 ```
 
+Current default for `coarse_label` is `filename_group` mode in
+`scripts/build_histoseg_pairs_csv.py` (`A -> non_cancer`, `B/C/D -> cancer`).
+Use `--coarse-label-mode mask_classes` only if mask-class mapping is validated for your setup.
+
 4) Fill shared model paths in `params.yaml` (single source of truth):
 - `models.sdxl_base_model`
 - `models.classifier_checkpoint`

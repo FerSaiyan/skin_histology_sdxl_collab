@@ -30,3 +30,12 @@ pipeline:
   phase1_runtime: configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml
   phase2_runtime: configs/runtime/sdxl_lora_phase2_reward_skin_histology.runtime.yaml
   phase3_runtime: configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
+
+patch_workflow:
+  patch_size: 1024
+  target_size: 512
+  padding_ratio: 0.15
+  feather_radius: 16
+  num_steps: 40
+  guidance_scale: 5.0
+  strength: 0.55

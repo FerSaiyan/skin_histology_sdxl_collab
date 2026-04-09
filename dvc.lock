@@ -134,8 +134,8 @@ stages:
       size: 1311
     - path: scripts/build_histoseg_pairs_csv.py
       hash: md5
-      md5: 4932aac8060697c56d88814122206733
-      size: 5901
+      md5: 1d4a125b0e321e81b5bc98b993db138d
+      size: 7484
     params:
       params.yaml:
         dataset.pairs_csv: data/processed/histoseg_pairs.csv
@@ -143,9 +143,9 @@ stages:
     outs:
     - path: data/processed/histoseg_pairs.csv
       hash: md5
-      md5: 5b52b1673a7343e822e44aa109e58e6a
-      size: 12390
+      md5: d21e63f94d9c7c494556dc607c496451
+      size: 13254
     - path: data/processed/histoseg_pairs_stats.json
       hash: md5
-      md5: 0533f933de98d5409a1da5d21cae1503
-      size: 391
+      md5: a9576f3a70db67491f75fd6bd7d35005
+      size: 472

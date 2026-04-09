@@ -29,7 +29,6 @@ import warnings
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import numpy as np
 import pandas as pd
 from PIL import Image
 
@@ -50,6 +49,29 @@ CLASS_NAME_BY_ID: Dict[int, str] = {
 }
 
 CANCER_CLASS_IDS = {9, 10, 11}
+FILENAME_GROUP_TO_COARSE = {
+    "A": "non_cancer",
+    "B": "cancer",
+    "C": "cancer",
+    "D": "cancer",
+}
+
+# Histo-Seg masks are RGB-coded with a fixed 12-color palette.
+# This mapping follows the dataset class order in the publication description.
+HISTOSEG_COLOR_TO_CLASS_ID: Dict[Tuple[int, int, int], int] = {
+    (0, 0, 0): 0,          # background
+    (224, 224, 224): 1,    # epidermis
+    (96, 96, 96): 2,       # reticular dermis
+    (150, 150, 0): 3,      # papillary dermis
+    (127, 255, 255): 4,    # dermis
+    (255, 156, 0): 5,      # keratin
+    (255, 0, 255): 6,      # inflammation
+    (0, 255, 0): 7,        # hair follicles
+    (0, 156, 255): 8,      # glands
+    (127, 96, 255): 9,     # basal cell carcinoma
+    (112, 48, 160): 10,    # squamous cell carcinoma
+    (0, 0, 128): 11,       # intraepidermal carcinoma
+}
 
 
 def _parse_volume_slice(stem: str) -> Tuple[str, int]:
@@ -68,28 +90,30 @@ def _parse_volume_slice(stem: str) -> Tuple[str, int]:
     return volume_base, int(m.group(2))
 
 
+def _parse_group_code(stem: str) -> str:
+    m = re.search(r"\(([A-Z])\d-\d\)", stem)
+    return m.group(1) if m else "UNK"
+
+
 def _mask_stats(mask_path: Path) -> Tuple[List[int], int]:
-    arr = np.array(Image.open(mask_path))
+    im = Image.open(mask_path)
+    colors = im.getcolors(maxcolors=16_777_216)
+    if colors is None:
+        raise ValueError(f"Too many unique colors in mask (unexpected): {mask_path}")
 
-    channel = None
-    if arr.ndim == 2:
-        channel = arr
-
-    elif arr.ndim == 3:
-        if np.array_equal(arr[..., 0], arr[..., 1]) and np.array_equal(arr[..., 0], arr[..., 2]):
-            channel = arr[..., 0]
+    class_counts: Dict[int, int] = {}
+    for count, color in colors:
+        if isinstance(color, int):
+            class_id = int(color)
         else:
-            # Fallback: non-grayscale RGB mask. Use first channel to keep pipeline moving.
-            channel = arr[..., 0]
+            rgb = tuple(int(x) for x in color[:3])
+            class_id = int(HISTOSEG_COLOR_TO_CLASS_ID.get(rgb, -1))
+        class_counts[class_id] = class_counts.get(class_id, 0) + int(count)
 
-    else:
-        raise ValueError(f"Unexpected mask dimensions for {mask_path}: {arr.shape}")
+    class_ids = sorted(x for x in class_counts.keys() if x >= 0)
 
-    vals, counts = np.unique(channel, return_counts=True)
-    class_ids = sorted(int(x) for x in vals.tolist())
-
+    non_bg = [(cid, cnt) for cid, cnt in class_counts.items() if cid > 0]
     dominant_class_id = 0
-    non_bg = [(int(v), int(c)) for v, c in zip(vals.tolist(), counts.tolist()) if int(v) != 0]
     if non_bg:
         non_bg.sort(key=lambda x: x[1], reverse=True)
         dominant_class_id = int(non_bg[0][0])
@@ -102,6 +126,16 @@ def main() -> None:
     ap.add_argument("--dataset-dir", required=True, help="Directory containing .jpg images and .png masks.")
     ap.add_argument("--output-csv", required=True, help="Output CSV path.")
     ap.add_argument("--stats-json", default=None, help="Optional summary JSON path.")
+    ap.add_argument(
+        "--coarse-label-mode",
+        choices=["filename_group", "mask_classes"],
+        default="filename_group",
+        help=(
+            "How to derive coarse_label. "
+            "filename_group: A->non_cancer, B/C/D->cancer (default). "
+            "mask_classes: cancer if class id 9/10/11 present in mask."
+        ),
+    )
     args = ap.parse_args()
 
     Image.MAX_IMAGE_PIXELS = None
@@ -133,7 +167,12 @@ def main() -> None:
         else:
             histology_label = CLASS_NAME_BY_ID[0]
 
-        coarse_label = "cancer" if any(x in CANCER_CLASS_IDS for x in non_bg_ids) else "non_cancer"
+        group_code = _parse_group_code(stem)
+        if args.coarse_label_mode == "filename_group":
+            coarse_label = FILENAME_GROUP_TO_COARSE.get(group_code, "non_cancer")
+        else:
+            coarse_label = "cancer" if any(x in CANCER_CLASS_IDS for x in non_bg_ids) else "non_cancer"
+
         volume_id, slice_index = _parse_volume_slice(stem)
 
         rows.append(
@@ -143,12 +182,14 @@ def main() -> None:
                 "filename": img_path.name,
                 "mask_filename": mask_path.name,
                 "slice_id": stem,
+                "group_code": group_code,
                 "volume_id": volume_id,
                 "slice_index": slice_index,
                 "classes_present": ",".join(str(x) for x in class_ids),
                 "dominant_class_id": dominant_class_id,
                 "histology_label": histology_label,
                 "coarse_label": coarse_label,
+                "coarse_label_source": args.coarse_label_mode,
             }
         )
 

@@ -109,16 +109,66 @@ stages:
     params:
       - pipeline.phase2_runtime
 
-  train_skin_lora_phase3:
-    cmd: python scripts/synthetic_data/phase3_morph_reward_guided_lora.py --config configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
+train_skin_lora_phase3:
+  cmd: python scripts/synthetic_data/phase3_morph_reward_guided_lora.py --config configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
+  deps:
+    - scripts/synthetic_data/phase3_morph_reward_guided_lora.py
+    - params.yaml
+    - data/metadata/runtime_config_sync.json
+    - configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
+    - outputs/finetunes/skin_histology_phase2_reward/run1
+  outs:
+    - outputs/finetunes/skin_histology_phase3_morph_reward/run1:
+        cache: false
+  params:
+    - pipeline.phase3_runtime
+
+  # Patch workflow stages (optional, for large-slide editing)
+
+  extract_roi_patches:
+    cmd: python scripts/patches/extract_roi_patches.py --csv data/processed/histoseg_pairs.csv --image-dir data/raw/histo_seg_v2 --mask-dir data/artifacts/roi_masks/histoseg_pairs --output-dir data/artifacts/patches --patch-size 1024 --target-size 512 --max-slices 0
     deps:
-      - scripts/synthetic_data/phase3_morph_reward_guided_lora.py
-      - params.yaml
-      - data/metadata/runtime_config_sync.json
-      - configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
-      - outputs/finetunes/skin_histology_phase2_reward/run1
+      - scripts/patches/extract_roi_patches.py
+      - data/processed/histoseg_pairs.csv
+      - data/raw/histo_seg_v2
+      - data/artifacts/roi_masks/histoseg_pairs
     outs:
-      - outputs/finetunes/skin_histology_phase3_morph_reward/run1:
+      - data/artifacts/patches/patches:
           cache: false
-    params:
-      - pipeline.phase3_runtime
+      - data/artifacts/patches/masks:
+          cache: false
+      - data/artifacts/patches/metadata/patches_metadata.csv
+
+  inpaint_roi_patches:
+    cmd: python scripts/patches/inpaint_roi_patches.py --metadata-csv data/artifacts/patches/metadata/patches_metadata.csv --output-dir data/artifacts/inpainted --base-model ${SDXL_BASE_MODEL} --lora-weights ${LORA_WEIGHTS} --dry-run
+    deps:
+      - scripts/patches/inpaint_roi_patches.py
+      - data/artifacts/patches/metadata/patches_metadata.csv
+      - data/artifacts/patches/patches
+      - data/artifacts/patches/masks
+    outs:
+      - data/artifacts/inpainted/images:
+          cache: false
+      - data/artifacts/inpainted/metadata/inpaint_metadata.csv
+
+  merge_inpainted_patches:
+    cmd: python scripts/patches/merge_inpainted_patches.py --inpaint-metadata data/artifacts/inpainted/metadata/inpaint_metadata.csv --extract-metadata data/artifacts/patches/metadata/patches_metadata.csv --output-dir data/artifacts/merged
+    deps:
+      - scripts/patches/merge_inpainted_patches.py
+      - data/artifacts/inpainted/metadata/inpaint_metadata.csv
+      - data/artifacts/patches/metadata/patches_metadata.csv
+      - data/artifacts/inpainted/images
+    outs:
+      - data/artifacts/merged/slices:
+          cache: false
+      - data/artifacts/merged/metadata/merge_metadata.csv
+
+  qc_patch_replacement:
+    cmd: python scripts/patches/qc_patch_replacement.py --merge-metadata data/artifacts/merged/metadata/merge_metadata.csv --output-dir data/artifacts/qc
+    deps:
+      - scripts/patches/qc_patch_replacement.py
+      - data/artifacts/merged/metadata/merge_metadata.csv
+      - data/artifacts/merged/slices
+    outs:
+      - data/artifacts/qc/metadata/qc_metadata.csv
+      - data/artifacts/qc/reports/qc_summary.json

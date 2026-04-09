@@ -105,6 +105,9 @@ Main stages in `dvc.yaml`:
 7. `train_skin_lora_phase2`
 8. `train_skin_lora_phase3`
 
+`build_histoseg_pairs_csv` currently derives `coarse_label` via filename group
+(`A -> non_cancer`, `B/C/D -> cancer`) to guarantee binary classes for Phase 2/3 loops.
+
 Typical run sequence:
 
 ```bash
