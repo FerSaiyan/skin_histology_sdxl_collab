@@ -4,6 +4,10 @@ outputs/
 mlruns/
 logs/
 
+# Comparison pipeline artifacts
+data/artifacts/compare_phase*/
+outputs/finetunes/**/run10/
+
 # Python / notebooks
 __pycache__/
 *.pyc
