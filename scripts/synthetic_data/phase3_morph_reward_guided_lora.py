@@ -867,9 +867,10 @@ def main() -> None:
             active_train_masks = str(current_curriculum_masks)
 
         mask_dir_raw = cycle_cfg.get("lora_mask_dir")
-        if mask_dir_raw in (None, "", "null"):
+        lora_mask_mode = str(cycle_cfg.get("lora_mask_mode", "directory")).strip().lower()
+        if lora_mask_mode == "directory" and mask_dir_raw in (None, "", "null"):
             raise SystemExit(
-                "Phase 3 requires lora_mask_dir. "
+                "Phase 3 with lora_mask_mode='directory' requires lora_mask_dir. "
                 "Set it in config.inpaint_train_overrides or notebook overrides."
             )
 

@@ -53,12 +53,15 @@ def main() -> None:
     models = params.get("models", {}) or {}
     dataset = params.get("dataset", {}) or {}
     gradcam = params.get("gradcam", {}) or {}
+    patch_workflow = params.get("patch_workflow", {}) or {}
 
     sdxl_base_model = _required_path("models.sdxl_base_model", models.get("sdxl_base_model"))
     classifier_ckpt = _required_path("models.classifier_checkpoint", models.get("classifier_checkpoint"))
     kohya_dir = _required_path("models.kohya_scripts_dir", models.get("kohya_scripts_dir"))
     labels_csv = _required_path("dataset.pairs_csv", dataset.get("pairs_csv"))
-    mask_dir = _required_path("gradcam.output_dir", gradcam.get("output_dir"))
+    mask_dir = str(patch_workflow.get("training_mask_dir") or "").strip()
+    if not mask_dir:
+        mask_dir = _required_path("gradcam.output_dir", gradcam.get("output_dir"))
 
     phase1 = _load_yaml(Path(args.phase1_template))
     phase2 = _load_yaml(Path(args.phase2_template))

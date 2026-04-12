@@ -1,0 +1,103 @@
+project_path: /home/fertroll10/Documents/ML/skin_histology_sdxl_collab
+python_exec: python
+
+base_train_config: configs/sdxl_lora_phase1_skin_histology_tiles_randommask.yaml
+initial_lora_weights: outputs/finetunes/skin_histology_phase2_reward_tiles_randommask/run5/best.safetensors
+
+work_dir: outputs/finetunes/skin_histology_phase3_morph_reward_tiles_randommask/run5
+
+cycles: 5
+steps_per_cycle: 250
+save_every_n_steps: 250
+sample_every_n_steps_override: 250
+selector_include_last_checkpoint: false
+lora_dim_from_weights: true
+
+cycle_seed_mode: incremental
+cycle_seed_base: 900
+cycle_seed_step: 1
+
+revert_on_drop: true
+improvement_epsilon: 0.0001
+patience: 0
+
+force_materialize_from_labels_csv: false
+
+train_overrides:
+  use_existing_dataset_captions: false
+  labels_csv_path: data/processed/histoseg_tile_pairs.csv
+  label_column: coarse_label
+  prepare_latents_mixed_precision: "no"
+  latent_batch_size: 2
+  prepare_latents_nan_retries: 0
+  prepare_latents_nan_quarantine_dir: null
+  train_batch_size: 1
+  gradient_accumulation_steps: 4
+  resolution: "512,512"
+
+inpaint_train_overrides:
+  lora_use_masked_loss: true
+  lora_mask_mode: directory
+  lora_mask_dir: data/artifacts/tiles/masks_random_512
+  lora_mask_feather_radius: 0.0
+  lora_mask_strength: 1.0
+  lora_random_mask_seed: 222
+  lora_random_mask_min_area_frac: 0.12
+  lora_random_mask_max_area_frac: 0.40
+  lora_random_mask_tissue_min_overlap: 0.0
+  sample_denoising_strength: 0.55
+  sample_mask_strength: 0.8
+  sample_mask_blur_radius: 6.0
+
+selector:
+  base_model: /home/fertroll10/Documents/ML/SUS_scraper/pretrained_models/sd_xl_base_1.0.safetensors
+  labels_csv: data/processed/histoseg_tile_pairs.csv
+  label_col: coarse_label
+  mask_dir: data/artifacts/tiles/masks_random_512
+  classifier_ckpt: outputs/classifiers/histoseg_effnet_b0_binary.pth
+  classifier_study_config: configs/studies/histoseg_effnet_b0_binary.yaml
+  generation_device: cuda
+  classifier_device: cuda
+  batch_size: 32
+  images_per_class: 6
+  max_sources: 0
+  steps: 40
+  guidance_scale: 5.0
+  strength: 0.55
+  same_class_strength: 0.55
+  cross_class_strength: 0.75
+  lora_scale: 0.75
+  negative_prompt: "lowres,blurry,artifact,painting,illustration,cartoon,geometric pattern,abstract art"
+  width: 512
+  height: 512
+  mask_feather_radius: 6.0
+  same_class_mask_dilate_px: 0.0
+  cross_class_mask_dilate_px: 4.0
+  seed_base: 222
+  prompt_template: "H&E stained skin histopathology tile, diagnosis: {token}{descriptor_suffix}, realistic microscopy"
+  tokens: non_cancer,cancer
+  descriptors_json:
+    non_cancer: "normal skin tissue architecture, preserved stratification"
+    cancer: "malignant skin histology pattern with dysplastic morphology"
+  cross_class_weight: 0.75
+  same_class_weight: 0.25
+  reuse_selected_sources_across_cycles: true
+  exclude_last: false
+  max_checkpoints: 0
+
+curriculum:
+  enabled: true
+  include_real_anchor: true
+  real_anchor_images_per_class: 64
+  cross_class_repeat: 4
+  same_class_repeat: 1
+  cross_class_min_margin: 0.0
+  same_class_min_target_prob: 0.8
+
+holdout_eval:
+  enabled: true
+  images_per_class: 4
+  max_sources: 0
+  seed_base: 1337
+  out_dir_name: holdout_eval
+  inherit_selector_settings: true

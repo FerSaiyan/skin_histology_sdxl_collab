@@ -7,7 +7,7 @@ import unicodedata as ud
 from unidecode import unidecode
 import re
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 Image.MAX_IMAGE_PIXELS = None
 warnings.filterwarnings("ignore", category=Image.DecompressionBombWarning)
 _ws_re = re.compile(r"\s+")
@@ -145,6 +145,15 @@ def _coerce_optional_int(raw) -> int | None:
     return int(raw)
 
 
+def _coerce_row_optional_int(raw) -> int | None:
+    if raw in (None, "", "null"):
+        return None
+    try:
+        return int(float(raw))
+    except Exception:
+        return None
+
+
 def _coerce_prompt_list(raw) -> list[str]:
     if raw is None:
         return []
@@ -156,7 +165,7 @@ def _coerce_prompt_list(raw) -> list[str]:
 
 
 def _extract_diagnosis_token(text: str) -> str:
-    m = re.search(r"diagnosis:\s*([A-Za-z0-9_]+)", text)
+    m = re.search(r"(?:diagnosis|tissue\s*pattern):\s*([A-Za-z0-9_]+)", text, flags=re.IGNORECASE)
     if m:
         return m.group(1)
     parts = text.split()
@@ -224,6 +233,259 @@ def _prepare_soft_masks_for_training(
         f"(feather_radius={feather_radius}, mask_strength={mask_strength})."
     )
     return output_mask_dir
+
+
+def _row_crop_box(row_meta: dict) -> tuple[int, int, int, int] | None:
+    x = _coerce_row_optional_int(row_meta.get("tile_x"))
+    y = _coerce_row_optional_int(row_meta.get("tile_y"))
+    size = _coerce_row_optional_int(row_meta.get("tile_size"))
+    w = _coerce_row_optional_int(row_meta.get("tile_w")) or size
+    h = _coerce_row_optional_int(row_meta.get("tile_h")) or size
+    if x is None or y is None or w is None or h is None:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return (x, y, x + w, y + h)
+
+
+def _materialize_dataset_from_csv(
+    *,
+    dataset_path: Path,
+    filename_map: dict,
+    image_path_map: dict,
+    row_meta_by_stem: dict,
+) -> tuple[int, int]:
+    missing_src = 0
+    created = 0
+    crop_jobs_by_source: dict[Path, list[tuple[Path, tuple[int, int, int, int]]]] = {}
+
+    for key, fn in filename_map.items():
+        src_path = image_path_map.get(key)
+        if not src_path:
+            continue
+        src = Path(src_path)
+        if not src.is_file():
+            missing_src += 1
+            continue
+
+        dst = dataset_path / fn
+        if dst.exists():
+            continue
+
+        row_meta = row_meta_by_stem.get(key, {})
+        crop_box = _row_crop_box(row_meta)
+
+        if crop_box is None:
+            try:
+                os.symlink(src, dst)
+            except OSError:
+                shutil.copy2(src, dst)
+            created += 1
+            continue
+
+        crop_jobs_by_source.setdefault(src, []).append((dst, crop_box))
+
+    for src, jobs in crop_jobs_by_source.items():
+        with Image.open(src) as pil_img:
+            rgb = pil_img.convert("RGB")
+            w, h = rgb.size
+            for dst, crop_box in jobs:
+                x0, y0, x1, y1 = crop_box
+                x0 = max(0, min(x0, w - 1))
+                y0 = max(0, min(y0, h - 1))
+                x1 = max(x0 + 1, min(x1, w))
+                y1 = max(y0 + 1, min(y1, h))
+                tile = rgb.crop((x0, y0, x1, y1))
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                tile.save(dst)
+                created += 1
+
+    return created, missing_src
+
+
+def _binary_tissue_mask_from_row_meta(
+    *,
+    row_meta: dict,
+    target_hw: tuple[int, int],
+) -> np.ndarray | None:
+    mask_src_raw = row_meta.get("mask_path")
+    if not mask_src_raw:
+        return None
+    mask_src = Path(str(mask_src_raw))
+    if not mask_src.is_file():
+        return None
+
+    with Image.open(mask_src) as m:
+        arr = np.asarray(m.convert("RGB"))
+    if arr.ndim == 3:
+        tissue = np.any(arr != 0, axis=2).astype(np.uint8)
+    else:
+        tissue = (arr > 0).astype(np.uint8)
+
+    crop_box = _row_crop_box(row_meta)
+    if crop_box is not None:
+        x0, y0, x1, y1 = crop_box
+        h0, w0 = tissue.shape[:2]
+        x0 = max(0, min(x0, w0 - 1))
+        y0 = max(0, min(y0, h0 - 1))
+        x1 = max(x0 + 1, min(x1, w0))
+        y1 = max(y0 + 1, min(y1, h0))
+        tissue = tissue[y0:y1, x0:x1]
+
+    th, tw = target_hw
+    if tissue.shape[0] != th or tissue.shape[1] != tw:
+        tissue = np.asarray(
+            Image.fromarray((tissue * 255).astype(np.uint8)).resize(
+                (tw, th),
+                Image.Resampling.NEAREST,
+            )
+        )
+        tissue = (tissue > 0).astype(np.uint8)
+
+    return tissue
+
+
+def _sample_random_brush_mask(
+    *,
+    width: int,
+    height: int,
+    rng: np.random.Generator,
+    min_area_frac: float,
+    max_area_frac: float,
+    min_strokes: int,
+    max_strokes: int,
+    min_vertices: int,
+    max_vertices: int,
+    min_brush_px: int,
+    max_brush_px: int,
+) -> np.ndarray:
+    canvas = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(canvas)
+
+    n_strokes = int(rng.integers(min_strokes, max_strokes + 1))
+    for _ in range(n_strokes):
+        n_points = int(rng.integers(min_vertices, max_vertices + 1))
+        x = int(rng.integers(0, width))
+        y = int(rng.integers(0, height))
+        points = [(x, y)]
+        for _ in range(n_points - 1):
+            dx = int(rng.integers(-width // 3, width // 3 + 1))
+            dy = int(rng.integers(-height // 3, height // 3 + 1))
+            x = max(0, min(width - 1, x + dx))
+            y = max(0, min(height - 1, y + dy))
+            points.append((x, y))
+
+        brush_w = int(rng.integers(min_brush_px, max_brush_px + 1))
+        draw.line(points, fill=255, width=brush_w, joint="curve")
+        r = max(1, brush_w // 2)
+        for px, py in points:
+            draw.ellipse((px - r, py - r, px + r, py + r), fill=255)
+
+    arr = np.asarray(canvas, dtype=np.uint8)
+    frac = float((arr > 0).mean())
+    if frac < min_area_frac or frac > max_area_frac:
+        return np.zeros_like(arr)
+    return arr
+
+
+def _prepare_random_masks_for_training(
+    *,
+    dataset_path: Path,
+    output_mask_dir: Path,
+    row_meta_by_stem: dict,
+    feather_radius: float,
+    mask_strength: float,
+    seed: int,
+    min_area_frac: float,
+    max_area_frac: float,
+    max_attempts: int,
+    min_strokes: int,
+    max_strokes: int,
+    min_vertices: int,
+    max_vertices: int,
+    min_brush_px: int,
+    max_brush_px: int,
+    tissue_min_overlap: float,
+) -> Path:
+    image_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif", ".jxl"}
+    dataset_images = [p for p in dataset_path.iterdir() if p.suffix.lower() in image_exts]
+    if not dataset_images:
+        raise SystemExit(f"No training images found in dataset_path: {dataset_path}")
+
+    if output_mask_dir.exists():
+        for p in output_mask_dir.iterdir():
+            if p.is_file() or p.is_symlink():
+                p.unlink()
+    else:
+        output_mask_dir.mkdir(parents=True, exist_ok=True)
+
+    rng = np.random.default_rng(int(seed))
+    generated = 0
+    total_images = len(dataset_images)
+    for idx, img in enumerate(dataset_images, start=1):
+        with Image.open(img) as pil_img:
+            w, h = pil_img.size
+
+        row_meta = row_meta_by_stem.get(img.stem.lower(), {})
+        tissue = None
+        if tissue_min_overlap > 0:
+            tissue = _binary_tissue_mask_from_row_meta(row_meta=row_meta, target_hw=(h, w))
+
+        mask_arr = None
+        for _ in range(max(1, int(max_attempts))):
+            cand = _sample_random_brush_mask(
+                width=w,
+                height=h,
+                rng=rng,
+                min_area_frac=float(min_area_frac),
+                max_area_frac=float(max_area_frac),
+                min_strokes=int(min_strokes),
+                max_strokes=int(max_strokes),
+                min_vertices=int(min_vertices),
+                max_vertices=int(max_vertices),
+                min_brush_px=int(min_brush_px),
+                max_brush_px=int(max_brush_px),
+            )
+            if cand.max() == 0:
+                continue
+            if tissue is not None:
+                m = cand > 0
+                overlap = float(np.logical_and(m, tissue > 0).sum()) / float(max(m.sum(), 1))
+                if overlap < float(tissue_min_overlap):
+                    continue
+            mask_arr = cand
+            break
+
+        if mask_arr is None:
+            # Fallback: centered ellipse to avoid dropping samples.
+            fallback = Image.new("L", (w, h), 0)
+            d = ImageDraw.Draw(fallback)
+            rx = max(8, w // 6)
+            ry = max(8, h // 6)
+            cx, cy = w // 2, h // 2
+            d.ellipse((cx - rx, cy - ry, cx + rx, cy + ry), fill=255)
+            mask_arr = np.asarray(fallback, dtype=np.uint8)
+
+        mask = Image.fromarray(mask_arr)
+        if feather_radius > 0:
+            mask = mask.filter(ImageFilter.GaussianBlur(radius=float(feather_radius)))
+        if abs(mask_strength - 1.0) > 1e-6:
+            arr = np.asarray(mask, dtype=np.float32) * float(mask_strength)
+            arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
+            mask = Image.fromarray(arr)
+
+        out_mask = output_mask_dir / img.name
+        mask.save(out_mask)
+        generated += 1
+        if idx % 500 == 0 or idx == total_images:
+            print(f"Random-mask prep progress: {idx}/{total_images}", flush=True)
+
+    print(
+        f"Prepared random masks for masked-loss training in {output_mask_dir} "
+        f"(generated={generated}, area_frac=[{min_area_frac},{max_area_frac}], tissue_min_overlap={tissue_min_overlap})."
+    )
+    return output_mask_dir
+
 
 def main(args):
     # Load config if provided
@@ -352,6 +614,9 @@ def main(args):
 
     # LoRA inpainting / masked-loss specific toggles (no-op for full FT)
     lora_use_masked_loss: bool = bool(cfg.get("lora_use_masked_loss", False))
+    lora_mask_mode = str(cfg.get("lora_mask_mode", "directory")).strip().lower()
+    if lora_mask_mode not in {"directory", "random"}:
+        raise SystemExit("lora_mask_mode must be one of: directory, random")
     lora_mask_dir_raw = cfg.get("lora_mask_dir")
     lora_mask_dir = Path(lora_mask_dir_raw).resolve() if lora_mask_dir_raw else None
     lora_mask_feather_radius = float(cfg.get("lora_mask_feather_radius", 0.0))
@@ -359,6 +624,17 @@ def main(args):
     if lora_mask_strength <= 0:
         raise SystemExit("lora_mask_strength must be > 0")
     lora_mask_processed_dir = _as_optional_path(cfg.get("lora_mask_processed_dir"), project_path)
+    lora_random_mask_seed = int(cfg.get("lora_random_mask_seed", cfg.get("seed", 222)))
+    lora_random_mask_min_area_frac = float(cfg.get("lora_random_mask_min_area_frac", 0.12))
+    lora_random_mask_max_area_frac = float(cfg.get("lora_random_mask_max_area_frac", 0.40))
+    lora_random_mask_max_attempts = int(cfg.get("lora_random_mask_max_attempts", 30))
+    lora_random_mask_min_strokes = int(cfg.get("lora_random_mask_min_strokes", 1))
+    lora_random_mask_max_strokes = int(cfg.get("lora_random_mask_max_strokes", 4))
+    lora_random_mask_min_vertices = int(cfg.get("lora_random_mask_min_vertices", 3))
+    lora_random_mask_max_vertices = int(cfg.get("lora_random_mask_max_vertices", 8))
+    lora_random_mask_min_brush_px = int(cfg.get("lora_random_mask_min_brush_px", 24))
+    lora_random_mask_max_brush_px = int(cfg.get("lora_random_mask_max_brush_px", 128))
+    lora_random_mask_tissue_min_overlap = float(cfg.get("lora_random_mask_tissue_min_overlap", 0.0))
     # ───────────────────── 1. Paths e pastas ─────────────────────
     materialize_from_csv = bool(cfg.get('materialize_from_labels_csv', False))
     dataset_path = Path(
@@ -426,6 +702,9 @@ def main(args):
     # Map textual labels (Portuguese fine taxonomies or 4-class coarse labels)
     # into 4 coarse tokens used in captions/prompts.
     _RAW = {
+        # 2-class coarse labels used in skin histology flow
+        "non_cancer": "non_cancer",
+        "non cancer": "non_cancer",
         # 4-class coarse labels (already in target space)
         "healthy": "healthy",
         "benign_lesion": "benign_lesion",
@@ -450,6 +729,7 @@ def main(args):
     label_dict = {}
     filename_map = {}
     image_path_map = {}
+    row_meta_by_stem = {}
     if not use_existing_dataset_captions:
         assert CSV_PATH is not None
         with CSV_PATH.open(newline="", encoding="utf-8") as fh:
@@ -491,7 +771,7 @@ def main(args):
                     # If the label already looks like a coarse token, keep it;
                     # otherwise fall back to benign_lesion.
                     coarse = category.replace(" ", "_")
-                    if coarse in {"healthy", "benign_lesion", "opmd", "cancer"}:
+                    if coarse in {"healthy", "benign_lesion", "opmd", "cancer", "non_cancer"}:
                         token = coarse
                     else:
                         token = "benign_lesion"
@@ -501,33 +781,31 @@ def main(args):
                 filename_map[key] = fn
                 if materialize_from_csv:
                     image_path_map[key] = row.get("image_path", "")
+                row_meta_by_stem[key] = {
+                    "filename": fn,
+                    "image_path": row.get("image_path", ""),
+                    "mask_path": row.get("mask_path", ""),
+                    "tile_x": row.get("tile_x"),
+                    "tile_y": row.get("tile_y"),
+                    "tile_size": row.get("tile_size"),
+                    "tile_w": row.get("tile_w"),
+                    "tile_h": row.get("tile_h"),
+                }
 
     # Optionally materialize the training dataset from the labels CSV
     # (e.g., using the full multisource_train.csv with absolute image_path).
     if materialize_from_csv:
-        missing_src = 0
-        created = 0
-        for key, fn in filename_map.items():
-            src_path = image_path_map.get(key)
-            if not src_path:
-                continue
-            src = Path(src_path)
-            if not src.is_file():
-                missing_src += 1
-                continue
-            dst = dataset_path / fn
-            if dst.exists():
-                continue
-            try:
-                os.symlink(src, dst)
-            except OSError:
-                # Fallback if symlinks are not available
-                shutil.copy2(src, dst)
-            created += 1
+        created, missing_src = _materialize_dataset_from_csv(
+            dataset_path=dataset_path,
+            filename_map=filename_map,
+            image_path_map=image_path_map,
+            row_meta_by_stem=row_meta_by_stem,
+        )
         print(f"Materialized dataset in {dataset_path} from {CSV_PATH}: {created} files (missing sources: {missing_src})")
 
     EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".jxl")
     default_class_descriptors = {
+        "non_cancer": "non-malignant skin histology tissue pattern",
         "healthy": "intact oral mucosa without visible lesion",
         "benign_lesion": "well-circumscribed benign oral lesion",
         "opmd": "oral potentially malignant disorder with heterogeneous plaque-like changes",
@@ -826,27 +1104,53 @@ def main(args):
         ]
 
         if lora_use_masked_loss:
-            if lora_mask_dir is None:
-                raise SystemExit(
-                    "lora_use_masked_loss=True but 'lora_mask_dir' is not set in the config. "
-                    "Point it to the ROI mask directory with one PNG per training image."
-                )
-            if not lora_mask_dir.is_dir():
-                raise SystemExit(f"Configured lora_mask_dir does not exist or is not a directory: {lora_mask_dir}")
-            effective_lora_mask_dir = lora_mask_dir
-            if lora_mask_feather_radius > 0 or abs(lora_mask_strength - 1.0) > 1e-6:
-                soft_mask_dir = (
+            if lora_mask_mode == "directory":
+                if lora_mask_dir is None:
+                    raise SystemExit(
+                        "lora_use_masked_loss=True with lora_mask_mode='directory' but 'lora_mask_dir' is not set."
+                    )
+                if not lora_mask_dir.is_dir():
+                    raise SystemExit(f"Configured lora_mask_dir does not exist or is not a directory: {lora_mask_dir}")
+                effective_lora_mask_dir = lora_mask_dir
+                if lora_mask_feather_radius > 0 or abs(lora_mask_strength - 1.0) > 1e-6:
+                    soft_mask_dir = (
+                        lora_mask_processed_dir
+                        if lora_mask_processed_dir is not None
+                        else (meta_dir / "masks_soft_for_masked_loss")
+                    )
+                    effective_lora_mask_dir = _prepare_soft_masks_for_training(
+                        dataset_path=dataset_path,
+                        source_mask_dir=lora_mask_dir,
+                        output_mask_dir=soft_mask_dir,
+                        feather_radius=lora_mask_feather_radius,
+                        mask_strength=lora_mask_strength,
+                    )
+            elif lora_mask_mode == "random":
+                random_mask_dir = (
                     lora_mask_processed_dir
                     if lora_mask_processed_dir is not None
-                    else (meta_dir / "masks_soft_for_masked_loss")
+                    else (meta_dir / "masks_random_for_masked_loss")
                 )
-                effective_lora_mask_dir = _prepare_soft_masks_for_training(
+                effective_lora_mask_dir = _prepare_random_masks_for_training(
                     dataset_path=dataset_path,
-                    source_mask_dir=lora_mask_dir,
-                    output_mask_dir=soft_mask_dir,
+                    output_mask_dir=random_mask_dir,
+                    row_meta_by_stem=row_meta_by_stem,
                     feather_radius=lora_mask_feather_radius,
                     mask_strength=lora_mask_strength,
+                    seed=lora_random_mask_seed,
+                    min_area_frac=lora_random_mask_min_area_frac,
+                    max_area_frac=lora_random_mask_max_area_frac,
+                    max_attempts=lora_random_mask_max_attempts,
+                    min_strokes=lora_random_mask_min_strokes,
+                    max_strokes=lora_random_mask_max_strokes,
+                    min_vertices=lora_random_mask_min_vertices,
+                    max_vertices=lora_random_mask_max_vertices,
+                    min_brush_px=lora_random_mask_min_brush_px,
+                    max_brush_px=lora_random_mask_max_brush_px,
+                    tissue_min_overlap=lora_random_mask_tissue_min_overlap,
                 )
+            else:
+                raise SystemExit(f"Unsupported lora_mask_mode: {lora_mask_mode}")
 
             # Build a minimal ControlNet-style dataset config (DreamBooth method with masks).
             # Each training image under dataset_path must have a corresponding mask PNG in lora_mask_dir.
@@ -981,8 +1285,13 @@ def main(args):
         'save_every_n_epochs': save_every_n_epochs,
         'save_every_n_steps': save_every_n_steps,
         'noise_offset': noise_offset,
+        'lora_mask_mode': lora_mask_mode,
         'lora_mask_feather_radius': lora_mask_feather_radius,
         'lora_mask_strength': lora_mask_strength,
+        'lora_random_mask_seed': lora_random_mask_seed,
+        'lora_random_mask_min_area_frac': lora_random_mask_min_area_frac,
+        'lora_random_mask_max_area_frac': lora_random_mask_max_area_frac,
+        'lora_random_mask_tissue_min_overlap': lora_random_mask_tissue_min_overlap,
         'optimizer_type': optimizer_type,
         'gradient_checkpointing': gradient_checkpointing,
         'min_snr_gamma': min_snr_gamma,

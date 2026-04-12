@@ -369,6 +369,27 @@ def _mask_name_for_row(row: pd.Series) -> str:
     return Path(str(row["image_path"])).name
 
 
+def _row_crop_box(row: pd.Series) -> tuple[int, int, int, int] | None:
+    def _to_int(v: object) -> Optional[int]:
+        if v in (None, "", "null"):
+            return None
+        try:
+            return int(float(v))
+        except Exception:
+            return None
+
+    x = _to_int(row.get("tile_x"))
+    y = _to_int(row.get("tile_y"))
+    size = _to_int(row.get("tile_size"))
+    w = _to_int(row.get("tile_w")) or size
+    h = _to_int(row.get("tile_h")) or size
+    if x is None or y is None or w is None or h is None:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return (x, y, x + w, y + h)
+
+
 def _make_overlay(image: Image.Image, mask: Image.Image, alpha: float = 0.40) -> Image.Image:
     img_arr = np.asarray(image.convert("RGB"), dtype=np.float32)
     mask_arr = np.asarray(mask.convert("L"), dtype=np.float32) / 255.0
@@ -406,9 +427,21 @@ def _load_source_inputs(
     mask_path: Path,
     width: int,
     height: int,
+    crop_box: Optional[tuple[int, int, int, int]] = None,
 ) -> dict:
-    image = Image.open(image_path).convert("RGB").resize((width, height), Image.LANCZOS)
-    mask = Image.open(mask_path).convert("L").resize((width, height), Image.LANCZOS)
+    image = Image.open(image_path).convert("RGB")
+    mask = Image.open(mask_path).convert("L")
+    if crop_box is not None:
+        x0, y0, x1, y1 = crop_box
+        iw, ih = image.size
+        x0 = max(0, min(x0, iw - 1))
+        y0 = max(0, min(y0, ih - 1))
+        x1 = max(x0 + 1, min(x1, iw))
+        y1 = max(y0 + 1, min(y1, ih))
+        image = image.crop((x0, y0, x1, y1))
+        mask = mask.crop((x0, y0, x1, y1))
+    image = image.resize((width, height), Image.LANCZOS)
+    mask = mask.resize((width, height), Image.LANCZOS)
     return {
         "image": image,
         "raw_mask": mask,
@@ -477,6 +510,11 @@ def _sample_sources(
     random_state: int,
 ) -> pd.DataFrame:
     def _has_mask(row: pd.Series) -> bool:
+        row_mask_path = str(row.get("mask_path", "")).strip()
+        if row_mask_path:
+            p = Path(row_mask_path)
+            if p.is_file():
+                return True
         return (mask_dir / _mask_name_for_row(row)).is_file()
 
     if "image_path" not in df.columns:
@@ -505,7 +543,8 @@ def _sample_sources(
     else:
         chosen = df.copy()
 
-    chosen = chosen.drop_duplicates(subset=["image_path"]).reset_index(drop=True)
+    dedup_key = "filename" if "filename" in chosen.columns else "image_path"
+    chosen = chosen.drop_duplicates(subset=[dedup_key]).reset_index(drop=True)
     chosen["mask_name"] = chosen.apply(_mask_name_for_row, axis=1)
     if int(max_sources) > 0 and len(chosen) > int(max_sources):
         chosen = chosen.sample(n=int(max_sources), random_state=random_state).reset_index(drop=True)
@@ -747,7 +786,17 @@ def main() -> None:
     for _, row in selected.iterrows():
         source_label = str(row[args.label_col])
         source_idx = int(row["source_index"])
-        source_key = f"{source_idx:04d}_{_safe_stem(Path(str(row['image_path'])))}"
+        source_name = str(row.get("filename", "")).strip() or str(Path(str(row["image_path"])).name)
+        source_key = f"{source_idx:04d}_{_safe_stem(Path(source_name))}"
+        row_mask_path = str(row.get("mask_path", "")).strip()
+        mask_from_dir = (mask_dir / str(row["mask_name"])).resolve()
+        if mask_from_dir.is_file():
+            resolved_mask_path = mask_from_dir
+        elif row_mask_path:
+            resolved_mask_path = Path(row_mask_path).resolve()
+        else:
+            resolved_mask_path = mask_from_dir
+        crop_box = _row_crop_box(row)
         for target_idx, target_label in enumerate(tokens):
             is_same = target_label == source_label
             task_strength = same_class_strength if is_same else cross_class_target_strengths.get(target_label, cross_class_strength)
@@ -761,8 +810,12 @@ def main() -> None:
                     "source_index": source_idx,
                     "source_key": source_key,
                     "source_path": str(Path(str(row["image_path"])).resolve()),
-                    "mask_path": str((mask_dir / str(row["mask_name"])).resolve()),
+                    "mask_path": str(resolved_mask_path),
                     "mask_name": str(row["mask_name"]),
+                    "tile_x": int(crop_box[0]) if crop_box is not None else None,
+                    "tile_y": int(crop_box[1]) if crop_box is not None else None,
+                    "tile_w": int(crop_box[2] - crop_box[0]) if crop_box is not None else None,
+                    "tile_h": int(crop_box[3] - crop_box[1]) if crop_box is not None else None,
                     "source_label": source_label,
                     "target_label": target_label,
                     "target_index": target_idx,
@@ -831,11 +884,17 @@ def main() -> None:
                     file_name = f"{source_key}__to__{task['target_label']}.png"
                     gen_path = model_out_dir / file_name
                     if source_key not in cached_inputs:
+                        crop_box = None
+                        if task.get("tile_x") is not None and task.get("tile_y") is not None and task.get("tile_w") is not None and task.get("tile_h") is not None:
+                            x0 = int(task["tile_x"])
+                            y0 = int(task["tile_y"])
+                            crop_box = (x0, y0, x0 + int(task["tile_w"]), y0 + int(task["tile_h"]))
                         cached_inputs[source_key] = _load_source_inputs(
                             image_path=Path(task["source_path"]),
                             mask_path=Path(task["mask_path"]),
                             width=int(args.width),
                             height=int(args.height),
+                            crop_box=crop_box,
                         )
                     source_inputs = cached_inputs[source_key]
                     mask_variant = _prepare_mask_variant(
@@ -919,6 +978,10 @@ def main() -> None:
                 "source_path",
                 "mask_path",
                 "mask_name",
+                "tile_x",
+                "tile_y",
+                "tile_w",
+                "tile_h",
                 "source_label",
                 "target_label",
                 "target_index",

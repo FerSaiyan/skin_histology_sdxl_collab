@@ -4,6 +4,8 @@ dataset:
   manifest_json: data/metadata/histo_seg_manifest.json
   download_dir: data/raw/histo_seg_v2
   pairs_csv: data/processed/histoseg_patch_pairs.csv
+  tile_pairs_csv: data/processed/histoseg_tile_pairs.csv
+  tile_pairs_stats_json: data/processed/histoseg_tile_pairs_stats.json
   pairs_stats_json: data/processed/histoseg_pairs_stats.json
 
 models:
@@ -12,10 +14,15 @@ models:
   kohya_scripts_dir: /home/fertroll10/Documents/ML/SUS_scraper/oral_lesions_project/kohya_ss/sd-scripts
 
 gradcam:
+  mode: gt_segmentation
   csv: data/processed/histoseg_pairs.csv
   image_column: image_path
+  mask_column: mask_path
   label_column: coarse_label
-  output_dir: data/artifacts/patches/masks
+  output_dir: data/artifacts/roi_masks/histoseg_pairs
+  gt_foreground: all_non_background
+  gt_include_class_ids: ""
+  gt_exclude_class_ids: ""
   model_config: configs/studies/histoseg_effnet_b0_binary.yaml
   gradcam_layer: enet.conv_head
   img_size: 384
@@ -32,6 +39,7 @@ pipeline:
   phase3_runtime: configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
 
 patch_workflow:
+  training_mask_dir: data/artifacts/patches/masks
   patch_size: 1024
   target_size: 512
   padding_ratio: 0.15
@@ -39,3 +47,45 @@ patch_workflow:
   num_steps: 40
   guidance_scale: 5.0
   strength: 0.55
+
+tile_mining:
+  source_pairs_csv: data/processed/histoseg_pairs.csv
+  output_csv: data/processed/histoseg_tile_pairs.csv
+  stats_json: data/processed/histoseg_tile_pairs_stats.json
+  tile_size: 512
+  stride: 64
+  min_mask_frac: 0.15
+  max_mask_frac: 0.95
+  max_white_frac: 0.30
+  white_threshold: 235
+  max_tiles_per_image: 250
+  max_total_tiles: 0
+  selection_mode: random
+  seed: 222
+  workers: 20
+
+tile_dataset:
+  labels_csv: data/processed/histoseg_tile_pairs.csv
+  output_dir: data/artifacts/tiles/materialized_512
+  stats_json: data/artifacts/tiles/materialized_512_stats.json
+  workers: 20
+
+tile_masks:
+  image_dir: data/artifacts/tiles/materialized_512
+  output_dir: data/artifacts/tiles/masks_random_512
+  stats_json: data/artifacts/tiles/masks_random_512_stats.json
+  workers: 20
+  seed: 222
+  white_threshold: 235
+  tissue_min_overlap: 0.60
+  min_area_frac: 0.12
+  max_area_frac: 0.40
+  max_attempts: 20
+  min_strokes: 1
+  max_strokes: 4
+  min_vertices: 3
+  max_vertices: 8
+  min_brush_px: 24
+  max_brush_px: 128
+  feather_radius: 0.0
+  mask_strength: 1.0

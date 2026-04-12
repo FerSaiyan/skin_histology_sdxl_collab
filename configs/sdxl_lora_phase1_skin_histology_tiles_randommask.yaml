@@ -1,0 +1,86 @@
+project_path: /home/fertroll10/Documents/ML/skin_histology_sdxl_collab
+training_mode: lora
+is_sdxl: true
+seed_name: "42"
+fold_number: "1"
+dataset_subdir: null
+
+base_model_path: /home/fertroll10/Documents/ML/SUS_scraper/pretrained_models/sd_xl_base_1.0.safetensors
+
+labels_csv_path: data/processed/histoseg_tile_pairs.csv
+label_column: coarse_label
+materialize_from_labels_csv: false
+dataset_path: data/artifacts/tiles/materialized_512
+kohya_scripts_dir: /home/fertroll10/Documents/ML/SUS_scraper/oral_lesions_project/kohya_ss/sd-scripts
+
+resolution: "512,512"
+train_batch_size: 1
+gradient_accumulation_steps: 4
+dataset_repeats: 1
+sample_every_n_steps: 200
+sample_sampler: "ddim"
+sample_steps: 35
+sample_guidance_scale: 5.0
+sample_negative_prompt: "lowres,blurry,artifact,painting,illustration,cartoon,geometric pattern,abstract art"
+sample_prompt_template: "H&E stained skin histopathology tile, diagnosis: {token}{descriptor_suffix}, realistic microscopy"
+sample_init_image: data/artifacts/tiles/sample_preview_init.png
+sample_mask_image: data/artifacts/tiles/sample_preview_mask.png
+sample_denoising_strength: 0.55
+sample_mask_blur_radius: 4.0
+sample_prompts_per_class: 3
+sample_use_class_descriptors: true
+sample_class_descriptors:
+  non_cancer: "normal skin tissue architecture, preserved stratification"
+  cancer: "malignant skin histology pattern with dysplastic morphology"
+sample_seed_mode: "per_class"
+sample_seed_base: 222
+
+max_train_epochs: 5
+lr_warmup_steps: 200
+save_every_n_epochs: 1
+noise_offset: 0.05
+optimizer_type: "AdamW8bit"
+gradient_checkpointing: true
+min_snr_gamma: 5
+lr_scheduler: "constant_with_warmup"
+mixed_precision: "fp16"
+attn_backend: "sdpa"
+seed: 222
+
+caption_template: "H&E stained skin histopathology tile, diagnosis: {token}{descriptor_suffix}, realistic microscopy"
+caption_use_class_descriptors: true
+caption_class_descriptors:
+  non_cancer: "normal skin tissue architecture, preserved stratification"
+  cancer: "malignant skin histology pattern with dysplastic morphology"
+
+lora_rank: 8
+lora_alpha: 8
+lora_lr: 5e-5
+lora_train_text_encoder: false
+lora_train_unet_only: true
+lora_te_only: false
+extra_train_args: []
+
+lora_use_masked_loss: true
+lora_mask_mode: directory
+lora_mask_dir: data/artifacts/tiles/masks_random_512
+lora_mask_feather_radius: 0.0
+lora_mask_strength: 1.0
+lora_mask_processed_dir: null
+lora_random_mask_seed: 222
+lora_random_mask_min_area_frac: 0.12
+lora_random_mask_max_area_frac: 0.40
+lora_random_mask_max_attempts: 30
+lora_random_mask_min_strokes: 1
+lora_random_mask_max_strokes: 4
+lora_random_mask_min_vertices: 3
+lora_random_mask_max_vertices: 8
+lora_random_mask_min_brush_px: 24
+lora_random_mask_max_brush_px: 128
+lora_random_mask_tissue_min_overlap: 0.0
+
+output_dir: outputs/finetunes/skin_histology_phase1_tiles_randommask
+logs_dir: outputs/logs/skin_histology_phase1_tiles_randommask
+
+mlflow_experiment: skin_histology_sdxl_phase1_tiles_randommask
+wandb_api_key: null

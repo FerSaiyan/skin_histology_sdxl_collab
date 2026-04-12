@@ -36,43 +36,69 @@ def main() -> None:
     params = _load_yaml(Path(args.params))
     gradcam = params.get("gradcam", {}) or {}
     models = params.get("models", {}) or {}
+    mode = str(gradcam.get("mode", "gradcam")).strip().lower()
 
-    cmd = [
-        sys.executable,
-        str(root / "scripts" / "synthetic_data" / "build_roi_masks_gradcam.py"),
-        "--csv",
-        _need("gradcam.csv", gradcam.get("csv")),
-        "--image-column",
-        str(gradcam.get("image_column", "image_path")),
-        "--label-column",
-        str(gradcam.get("label_column", "coarse_label")),
-        "--output-dir",
-        _need("gradcam.output_dir", gradcam.get("output_dir")),
-        "--model-config",
-        _need("gradcam.model_config", gradcam.get("model_config")),
-        "--checkpoint",
-        _need("models.classifier_checkpoint", models.get("classifier_checkpoint")),
-        "--gradcam-layer",
-        str(gradcam.get("gradcam_layer", "enet.conv_head")),
-        "--img-size",
-        str(int(gradcam.get("img_size", 384))),
-        "--threshold-quantile",
-        str(float(gradcam.get("threshold_quantile", 0.85))),
-        "--dilate-radius",
-        str(int(gradcam.get("dilate_radius", 9))),
-        "--device",
-        str(gradcam.get("device", "cuda:0")),
-    ]
+    if mode in {"gradcam", "classifier_gradcam"}:
+        cmd = [
+            sys.executable,
+            str(root / "scripts" / "synthetic_data" / "build_roi_masks_gradcam.py"),
+            "--csv",
+            _need("gradcam.csv", gradcam.get("csv")),
+            "--image-column",
+            str(gradcam.get("image_column", "image_path")),
+            "--label-column",
+            str(gradcam.get("label_column", "coarse_label")),
+            "--output-dir",
+            _need("gradcam.output_dir", gradcam.get("output_dir")),
+            "--model-config",
+            _need("gradcam.model_config", gradcam.get("model_config")),
+            "--checkpoint",
+            _need("models.classifier_checkpoint", models.get("classifier_checkpoint")),
+            "--gradcam-layer",
+            str(gradcam.get("gradcam_layer", "enet.conv_head")),
+            "--img-size",
+            str(int(gradcam.get("img_size", 384))),
+            "--threshold-quantile",
+            str(float(gradcam.get("threshold_quantile", 0.85))),
+            "--dilate-radius",
+            str(int(gradcam.get("dilate_radius", 9))),
+            "--device",
+            str(gradcam.get("device", "cuda:0")),
+        ]
 
-    if gradcam.get("resize_mode"):
-        cmd.extend(["--resize-mode", str(gradcam["resize_mode"])])
-    if gradcam.get("min_area_frac") is not None:
-        cmd.extend(["--min-area-frac", str(gradcam["min_area_frac"])])
-    if gradcam.get("max_area_frac") is not None:
-        cmd.extend(["--max-area-frac", str(gradcam["max_area_frac"])])
-    if gradcam.get("feather_radius") is not None:
-        cmd.extend(["--feather-radius", str(gradcam["feather_radius"])])
+        if gradcam.get("resize_mode"):
+            cmd.extend(["--resize-mode", str(gradcam["resize_mode"])])
+        if gradcam.get("min_area_frac") is not None:
+            cmd.extend(["--min-area-frac", str(gradcam["min_area_frac"])])
+        if gradcam.get("max_area_frac") is not None:
+            cmd.extend(["--max-area-frac", str(gradcam["max_area_frac"])])
+        if gradcam.get("feather_radius") is not None:
+            cmd.extend(["--feather-radius", str(gradcam["feather_radius"])])
+    elif mode in {"gt_segmentation", "ground_truth", "gt"}:
+        cmd = [
+            sys.executable,
+            str(root / "scripts" / "synthetic_data" / "build_roi_masks_from_gt.py"),
+            "--csv",
+            _need("gradcam.csv", gradcam.get("csv")),
+            "--mask-column",
+            str(gradcam.get("mask_column", "mask_path")),
+            "--output-dir",
+            _need("gradcam.output_dir", gradcam.get("output_dir")),
+            "--primary-name-column",
+            str(gradcam.get("primary_name_column", "filename")),
+            "--extra-name-columns",
+            str(gradcam.get("extra_name_columns", "mask_filename")),
+            "--foreground-mode",
+            str(gradcam.get("gt_foreground", "all_non_background")),
+            "--include-class-ids",
+            str(gradcam.get("gt_include_class_ids", "")),
+            "--exclude-class-ids",
+            str(gradcam.get("gt_exclude_class_ids", "")),
+        ]
+    else:
+        raise SystemExit(f"Unsupported gradcam.mode: {mode!r}")
 
+    print(f"[mask-builder mode={mode}]")
     print(">>", " ".join(cmd))
     subprocess.run(cmd, check=True)
 

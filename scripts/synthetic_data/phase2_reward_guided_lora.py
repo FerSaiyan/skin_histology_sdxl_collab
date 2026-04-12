@@ -424,9 +424,10 @@ def main() -> None:
 
         if phase2_mode == "inpaint":
             mask_dir_raw = cycle_cfg.get("lora_mask_dir")
-            if mask_dir_raw in (None, "", "null"):
+            lora_mask_mode = str(cycle_cfg.get("lora_mask_mode", "directory")).strip().lower()
+            if lora_mask_mode == "directory" and mask_dir_raw in (None, "", "null"):
                 raise SystemExit(
-                    "phase2_mode='inpaint' requires lora_mask_dir. "
+                    "phase2_mode='inpaint' with lora_mask_mode='directory' requires lora_mask_dir. "
                     "Set it in config.inpaint_train_overrides or notebook overrides."
                 )
             labels_csv_raw = selector_cfg.get("labels_csv", train_overrides.get("labels_csv_path"))
@@ -435,7 +436,12 @@ def main() -> None:
                     "phase2_mode='inpaint' requires selector.labels_csv or train_overrides.labels_csv_path."
                 )
             selector_labels_csv = _resolve_path(labels_csv_raw, cfg_dir=cfg_dir, project_root=project_root)
-            selector_mask_dir = _resolve_path(mask_dir_raw, cfg_dir=cfg_dir, project_root=project_root)
+            selector_mask_dir_raw = selector_cfg.get("mask_dir", mask_dir_raw)
+            if selector_mask_dir_raw in (None, "", "null"):
+                raise SystemExit(
+                    "phase2_mode='inpaint' requires selector.mask_dir (directory with source masks for selector benchmarking)."
+                )
+            selector_mask_dir = _resolve_path(selector_mask_dir_raw, cfg_dir=cfg_dir, project_root=project_root)
             if not selector_labels_csv.is_file():
                 raise SystemExit(f"selector.labels_csv not found: {selector_labels_csv}")
             if not selector_mask_dir.is_dir():

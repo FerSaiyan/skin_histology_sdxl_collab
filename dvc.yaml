@@ -36,6 +36,77 @@ stages:
       - dataset.pairs_csv
       - dataset.pairs_stats_json
 
+  build_histoseg_tile_index:
+    cmd: python scripts/patches/build_tile_index_from_masks.py --pairs-csv data/processed/histoseg_pairs.csv --output-csv data/processed/histoseg_tile_pairs.csv --stats-json data/processed/histoseg_tile_pairs_stats.json --tile-size 512 --stride 64 --min-mask-frac 0.15 --max-mask-frac 0.95 --max-white-frac 0.30 --white-threshold 235 --max-tiles-per-image 250 --max-total-tiles 0 --selection-mode random --seed 222 --workers 20
+    deps:
+      - scripts/patches/build_tile_index_from_masks.py
+      - params.yaml
+      - data/processed/histoseg_pairs.csv
+    outs:
+      - data/processed/histoseg_tile_pairs.csv
+      - data/processed/histoseg_tile_pairs_stats.json
+    params:
+      - tile_mining.source_pairs_csv
+      - tile_mining.output_csv
+      - tile_mining.stats_json
+      - tile_mining.tile_size
+      - tile_mining.stride
+      - tile_mining.min_mask_frac
+      - tile_mining.max_mask_frac
+      - tile_mining.max_white_frac
+      - tile_mining.white_threshold
+      - tile_mining.max_tiles_per_image
+      - tile_mining.max_total_tiles
+      - tile_mining.selection_mode
+      - tile_mining.seed
+      - tile_mining.workers
+
+  materialize_histoseg_tile_dataset:
+    cmd: python scripts/patches/materialize_tile_dataset.py --labels-csv data/processed/histoseg_tile_pairs.csv --output-dir data/artifacts/tiles/materialized_512 --workers 20 --clean --stats-json data/artifacts/tiles/materialized_512_stats.json
+    deps:
+      - scripts/patches/materialize_tile_dataset.py
+      - params.yaml
+      - data/processed/histoseg_tile_pairs.csv
+    outs:
+      - data/artifacts/tiles/materialized_512:
+          cache: false
+      - data/artifacts/tiles/materialized_512_stats.json
+    params:
+      - tile_dataset.labels_csv
+      - tile_dataset.output_dir
+      - tile_dataset.stats_json
+      - tile_dataset.workers
+
+  generate_histoseg_tile_random_masks:
+    cmd: python scripts/patches/generate_random_tile_masks.py --image-dir data/artifacts/tiles/materialized_512 --output-dir data/artifacts/tiles/masks_random_512 --workers 20 --seed 222 --white-threshold 235 --tissue-min-overlap 0.60 --max-attempts 20 --min-area-frac 0.12 --max-area-frac 0.40 --min-strokes 1 --max-strokes 4 --min-vertices 3 --max-vertices 8 --min-brush-px 24 --max-brush-px 128 --feather-radius 0.0 --mask-strength 1.0 --overwrite --stats-json data/artifacts/tiles/masks_random_512_stats.json
+    deps:
+      - scripts/patches/generate_random_tile_masks.py
+      - params.yaml
+      - data/artifacts/tiles/materialized_512
+    outs:
+      - data/artifacts/tiles/masks_random_512:
+          cache: false
+      - data/artifacts/tiles/masks_random_512_stats.json
+    params:
+      - tile_masks.image_dir
+      - tile_masks.output_dir
+      - tile_masks.stats_json
+      - tile_masks.workers
+      - tile_masks.seed
+      - tile_masks.white_threshold
+      - tile_masks.tissue_min_overlap
+      - tile_masks.max_attempts
+      - tile_masks.min_area_frac
+      - tile_masks.max_area_frac
+      - tile_masks.min_strokes
+      - tile_masks.max_strokes
+      - tile_masks.min_vertices
+      - tile_masks.max_vertices
+      - tile_masks.min_brush_px
+      - tile_masks.max_brush_px
+      - tile_masks.feather_radius
+      - tile_masks.mask_strength
+
   render_runtime_configs:
     cmd: python scripts/render_runtime_configs.py --params params.yaml --phase1-template configs/sdxl_lora_phase1_skin_histology.yaml --phase2-template configs/sdxl_lora_phase2_reward_skin_histology.yaml --phase3-template configs/sdxl_lora_phase3_morph_reward_skin_histology.yaml --phase1-out configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml --phase2-out configs/runtime/sdxl_lora_phase2_reward_skin_histology.runtime.yaml --phase3-out configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml --summary-out data/metadata/runtime_config_sync.json
     deps:
@@ -55,6 +126,7 @@ stages:
       - models.kohya_scripts_dir
       - dataset.pairs_csv
       - gradcam.output_dir
+      - patch_workflow.training_mask_dir
       - pipeline.phase1_template
       - pipeline.phase2_template
       - pipeline.phase3_template
@@ -67,6 +139,7 @@ stages:
     deps:
       - scripts/run_gradcam_from_params.py
       - scripts/synthetic_data/build_roi_masks_gradcam.py
+      - scripts/synthetic_data/build_roi_masks_from_gt.py
       - params.yaml
       - data/metadata/runtime_config_sync.json
       - data/processed/histoseg_pairs.csv
@@ -74,11 +147,16 @@ stages:
       - data/artifacts/roi_masks/histoseg_pairs:
           cache: false
     params:
+      - gradcam.mode
       - gradcam.csv
       - gradcam.image_column
       - gradcam.label_column
+      - gradcam.mask_column
       - gradcam.output_dir
       - gradcam.model_config
+      - gradcam.gt_foreground
+      - gradcam.gt_include_class_ids
+      - gradcam.gt_exclude_class_ids
       - models.classifier_checkpoint
 
   train_skin_lora_phase1:
