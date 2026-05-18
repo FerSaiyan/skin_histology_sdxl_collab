@@ -1,0 +1,90 @@
+# =============================================================================
+# MVP Multi-Physics Pipeline — Example Configuration
+# =============================================================================
+# This YAML config drives the integrated multi-physics pipeline via
+#   python scripts/simulation/run_mvp_multiphysics_from_config.py \
+#       --config configs/mvp_multiphysics_example.yaml
+#
+# All fields shown with classifier-free defaults.
+# Override any field on the CLI with --label-volume, --output-dir, --fail-fast.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Required: label volume and output directory
+# ---------------------------------------------------------------------------
+label_volume: /tmp/mvp_smoke_labels.npy
+output_dir: /tmp/mvp_smoke_run
+
+# ---------------------------------------------------------------------------
+# GA Optimiser options
+# ---------------------------------------------------------------------------
+ga:
+  # Enable GA step
+  enabled: true
+
+  # Mock mode: use synthetic metrics (lightweight, no external data needed)
+  mock: true
+
+  # Path to fitness JSON for real GA data mode.
+  # When set, mock is ignored. Expected format: list of genome+metric records.
+  fitness_json: null
+
+  # GA loop parameters
+  generations: 5
+  population_size: 8
+  mutation_rate: 0.2
+  mutation_strength: 0.1
+  elite_fraction: 0.1
+  tournament_size: 3
+  seed: 42
+
+# ---------------------------------------------------------------------------
+# MCX (Monte Carlo eXtreme) light transport options
+# ---------------------------------------------------------------------------
+mcx:
+  # Enable MCX build + batch runner steps
+  enabled: true
+
+  # Run mode: "dry-run" prints commands without executing;
+  #           "run" requires a real MCX binary (--mcx-binary).
+  mode: dry-run
+
+  # Path to the MCX binary (only used when mode is "run")
+  mcx_binary: mcx
+
+  # Number of photons for MCX simulation (recorded in config snapshot;
+  # actual value is set in mcx_config.json after build_volume step)
+  photons: 1000000
+
+# ---------------------------------------------------------------------------
+# Thermal (Pennes bioheat) simulation options
+# ---------------------------------------------------------------------------
+thermal:
+  # Enable thermal build + solve + visualise steps
+  enabled: true
+
+  # Time step in seconds
+  dt: 0.01
+
+  # Number of time steps
+  num_steps: 50
+
+  # Heat source parameters
+  source:
+    # Source mode: "none" or "spherical"
+    mode: spherical
+    # Sphere radius in voxels
+    radius_vox: 2.0
+    # Volumetric power density in W/m³
+    power: 500000.0
+    # Source center as [Z, Y, X] voxel indices (null = volume center)
+    center: null
+
+# ---------------------------------------------------------------------------
+# Error handling & runtime
+# ---------------------------------------------------------------------------
+# Stop on first step failure
+fail_fast: false
+
+# Per-step timeout in seconds (default: 600)
+timeout: 600

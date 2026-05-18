@@ -8,6 +8,10 @@ sampling, and mask strategy are configured this way.
 - Training images are materialized 512x512 tiles in `data/artifacts/tiles/materialized_512`.
 - Training masks are pre-generated random masks in `data/artifacts/tiles/masks_random_512`.
 - Tile mining uses a white-content cap (`tile_white_frac <= 0.30`) plus tissue coverage filter.
+- Random-mask generation currently uses:
+  - `min_area_frac=0.08`, `max_area_frac=0.22`
+  - `tissue_min_overlap=0.75`
+  - `feather_radius=2.0`
 
 Why this matters:
 - Random inpaint masks are useful only if tiles contain enough tissue.
@@ -29,6 +33,7 @@ Config: `configs/sdxl_lora_phase1_skin_histology_tiles_randommask.yaml`
 - Negative prompt includes anti-style terms:
   - `painting, illustration, cartoon, geometric pattern, abstract art`
 - `sample_init_image` + `sample_mask_image` are set, so preview sampling is inpaint-like (not pure text-to-image).
+- `sample_tokens` is explicitly set to `non_cancer,cancer`.
 
 ### Training behavior
 - LoRA rank/alpha: `8/8`
@@ -36,6 +41,10 @@ Config: `configs/sdxl_lora_phase1_skin_histology_tiles_randommask.yaml`
 - Batch/accum: `1 x 4`
 - Epochs: `5`
 - Masked-loss inpainting is enabled and uses directory masks (`lora_mask_mode: directory`).
+- Current blending-focused knobs:
+  - `lora_lr=2e-5`
+  - `sample_denoising_strength=0.40`
+  - `sample_mask_blur_radius=6.0`
 
 ## Phase 2 (Reward-Guided Selection)
 
@@ -46,11 +55,12 @@ Config: `configs/sdxl_lora_phase2_reward_skin_histology_tiles_randommask.yaml`
   - `H&E stained skin histopathology tile, diagnosis: {token}{descriptor_suffix}, realistic microscopy`
 - Same anti-style negative prompt as Phase 1.
 - Same/cross class strengths:
-  - same: `0.55`, cross: `0.75`
+  - same: `0.45`, cross: `0.60`
 
 ### Training behavior
 - `5` cycles, `250` steps per cycle.
 - Each cycle trains from the current best checkpoint.
+- Selector generation uses `strength=0.45`, `lora_scale=0.65`.
 - Selector benchmarks cycle checkpoints and picks best by weighted reward:
   - cross-class performance is weighted more than same-class (`0.75 / 0.25`).
 

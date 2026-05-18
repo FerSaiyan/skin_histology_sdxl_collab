@@ -27,6 +27,9 @@ These are the active DVC stages in `dvc.yaml`:
 6. `train_skin_lora_phase1`
 7. `train_skin_lora_phase2`
 8. `train_skin_lora_phase3`
+9. `generate_3d_test_masks` (optional, self-contained)
+10. `stack_3d_test_volume` (optional)
+11. `compute_3d_test_coherence` (optional)
 
 Key files controlling behavior:
 
@@ -474,22 +477,20 @@ Because histology slides are very large, MVP should edit local patches only.
 
 ---
 
-## 7) 3D Coherence Extension (Post-MVP)
+## 7) 3D Coherence Extension (MVP — In Progress)
 
-Do not start with full 3D diffusion.
+**See dedicated plan:** `docs/MVP_3D_INPAINTING_PLAN.md`
 
-First extension:
+Implemented (`scripts/3d/`):
+1. `propagate_mask_across_slices.py` — replicate a 2D mask through Z (cylindrical strategy) or generate centered circular test masks.
+2. `stack_slices_to_nifti.py` — stack ordered 2D slices into NIfTI volume.
+3. `compute_z_coherence_metrics.py` — adjacent-slice SSIM + Z-gradient smoothness.
 
-1. identify slice neighborhoods around anchor slice,
-2. propagate target edit parameters to adjacent slices,
-3. regularize per-slice edits with neighboring slice similarity constraints,
-4. reject inconsistent volumes by morphology + intensity continuity metrics.
-
-Suggested QC metrics:
-
-- adjacent-slice SSIM in non-edited regions,
-- connected-component continuity of edited morphology,
-- classifier probability trajectory smoothness across slice index.
+Next steps (detailed in the 3D plan):
+- ~~DVC stages for the 3D pipeline (optional, non-breaking).~~ ✅ (Phase B)
+- ~~Wire slice-stack processing into existing SDXL LoRA pipeline.~~ ✅ (Phase B: `run_volume_inpaint_pipeline.py` + metadata adapter `build_volume_inpaint_metadata.py`)
+- Z-coherence thresholding for rejection of inconsistent volumes.
+- YOLO detector for per-slice feature masks (future).
 
 ---
 

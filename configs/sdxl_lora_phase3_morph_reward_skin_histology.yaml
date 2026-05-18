@@ -8,10 +8,11 @@ initial_lora_weights: outputs/finetunes/skin_histology_phase2_reward/run1/best.s
 
 work_dir: outputs/finetunes/skin_histology_phase3_morph_reward/run1
 
-cycles: 6
-steps_per_cycle: 1000
-save_every_n_steps: 250
-sample_every_n_steps_override: 250
+cycles: 10
+steps_per_cycle: 1200
+save_every_n_steps: 300
+sample_every_n_steps_override: 300
+sample_every_n_epochs: 1
 selector_include_last_checkpoint: false
 lora_dim_from_weights: true
 
@@ -36,6 +37,7 @@ train_overrides:
   train_batch_size: 1
   gradient_accumulation_steps: 4
   resolution: "512,512"
+  lora_lr: 5e-05
 
 inpaint_train_overrides:
   lora_use_masked_loss: true
@@ -59,7 +61,7 @@ selector:
 
   images_per_class: 6
   max_sources: 0
-  steps: 40
+  steps: 35
   guidance_scale: 5.0
   strength: 0.55
   same_class_strength: 0.55

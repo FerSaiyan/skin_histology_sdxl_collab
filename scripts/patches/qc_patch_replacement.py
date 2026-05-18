@@ -7,18 +7,23 @@ This script:
 - Compares original vs edited regions
 - Checks non-ROI drift
 - Emits pass/fail flag and summary report
+- Computes classifier-free colorimetry metrics (RGB MAE, LAB delta, channel drift)
 
 Metrics computed:
 - mask_coverage: fraction of mask that was actually edited
 - non_roi_drift: mean absolute difference in non-ROI regions
 - seam_quality: edge difference at ROI boundary
 - intensity_preservation: histogram similarity in non-ROI regions
+- rgb_mae_global / rgb_mae_inside / rgb_mae_outside
+- lab_delta_global / lab_delta_inside / lab_delta_outside  (if cv2 available)
+- channel_drift_global / channel_drift_inside / channel_drift_outside  (per-channel KS)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -26,6 +31,13 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 from PIL import Image
+
+# Ensure repo root is on sys.path for internal imports
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from scripts.simulation.colorimetry_metrics import compute_all_colorimetry  # noqa: E402
 
 Image.MAX_IMAGE_PIXELS = None
 
@@ -146,13 +158,40 @@ def _compute_all_metrics(
     edited: np.ndarray,
     bbox: Tuple[int, int, int, int],
 ) -> Dict[str, float]:
-    """Compute all QC metrics."""
-    return {
+    """Compute all QC metrics, including classifier-free colorimetry."""
+    metrics: Dict[str, Any] = {
         "mask_coverage": _compute_mask_coverage(original, edited, bbox),
         "non_roi_drift": _compute_non_roi_drift(original, edited, bbox),
         "seam_quality": _compute_seam_quality(original, edited, bbox),
         "histogram_similarity": _compute_histogram_similarity(original, edited, bbox),
     }
+
+    # Build mask array from bbox for colorimetry decomposition
+    mask = np.zeros(original.shape[:2], dtype=np.uint8)
+    y_min, x_min, y_max, x_max = bbox
+    mask[y_min:y_max, x_min:x_max] = 1
+
+    try:
+        colorimetry = compute_all_colorimetry(original, edited, mask)
+        metrics.update(colorimetry)
+        metrics["colorimetry_warning"] = ""
+    except Exception as exc:
+        metrics["colorimetry_warning"] = str(exc)
+        # Fill colorimetry fields with NaN to keep CSV schema stable
+        for key in (
+            "rgb_mae_global", "rgb_mae_inside", "rgb_mae_outside", "rgb_mae_mask_status",
+            "lab_available", "lab_delta_global", "lab_delta_inside", "lab_delta_outside",
+            "lab_delta_status",
+            "channel_drift_available",
+        ):
+            metrics[key] = float("nan") if "status" not in key and "available" not in key else None
+        metrics["channel_drift_global"] = None
+        metrics["channel_drift_inside"] = None
+        metrics["channel_drift_outside"] = None
+        metrics["channel_drift_status"] = "error"
+        metrics["lab_delta_status"] = "error"
+
+    return metrics
 
 
 def _apply_rejection_rules(
@@ -263,6 +302,20 @@ def main() -> None:
             "non_roi_drift": metrics["non_roi_drift"],
             "seam_quality": metrics["seam_quality"],
             "histogram_similarity": metrics["histogram_similarity"],
+            # Colorimetry fields
+            "rgb_mae_global": metrics.get("rgb_mae_global"),
+            "rgb_mae_inside": metrics.get("rgb_mae_inside"),
+            "rgb_mae_outside": metrics.get("rgb_mae_outside"),
+            "rgb_mae_mask_status": metrics.get("rgb_mae_mask_status", ""),
+            "lab_delta_global": metrics.get("lab_delta_global"),
+            "lab_delta_inside": metrics.get("lab_delta_inside"),
+            "lab_delta_outside": metrics.get("lab_delta_outside"),
+            "lab_delta_status": metrics.get("lab_delta_status", ""),
+            "channel_drift_global": metrics.get("channel_drift_global"),
+            "channel_drift_inside": metrics.get("channel_drift_inside"),
+            "channel_drift_outside": metrics.get("channel_drift_outside"),
+            "channel_drift_status": metrics.get("channel_drift_status", ""),
+            "colorimetry_warning": metrics.get("colorimetry_warning", ""),
             "qc_at_utc": datetime.now(timezone.utc).isoformat(),
         }
         qc_metadata.append(qc_meta)

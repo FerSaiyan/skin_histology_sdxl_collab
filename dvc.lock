@@ -150,3 +150,173 @@ stages:
       hash: md5
       md5: a9576f3a70db67491f75fd6bd7d35005
       size: 472
+  generate_3d_test_masks:
+    cmd: python scripts/3d/propagate_mask_across_slices.py --num-slices 10 
+      --height 256 --width 256 --radius 0.3 --output-dir 
+      data/artifacts/3d/test_masks --stats-json 
+      data/artifacts/3d/test_masks_stats.json
+    deps:
+    - path: scripts/3d/propagate_mask_across_slices.py
+      hash: md5
+      md5: a3981f3f5f2c6e93c607b776b9db6641
+      size: 5429
+    outs:
+    - path: data/artifacts/3d/test_masks
+      hash: md5
+      md5: 8ab864d90a19bb30eff126d5afd25e6d.dir
+      size: 5380
+      nfiles: 10
+    - path: data/artifacts/3d/test_masks_stats.json
+      hash: md5
+      md5: 965ec1689b9090bb05a7d280b4aa5055
+      size: 303
+  stack_3d_test_volume:
+    cmd: python scripts/3d/stack_slices_to_nifti.py --input-glob 
+      "data/artifacts/3d/test_masks/mask_slice_*.png" --output-nifti 
+      data/artifacts/3d/test_volume.nii.gz --pixdim 1.0 1.0 2.0 --stats-json 
+      data/artifacts/3d/test_volume_stats.json
+    deps:
+    - path: data/artifacts/3d/test_masks
+      hash: md5
+      md5: 8ab864d90a19bb30eff126d5afd25e6d.dir
+      size: 5380
+      nfiles: 10
+    - path: scripts/3d/stack_slices_to_nifti.py
+      hash: md5
+      md5: 4569df7c95d184c975c4f85f8f38faea
+      size: 4095
+    outs:
+    - path: data/artifacts/3d/test_volume.nii.gz
+      hash: md5
+      md5: c879bf043c560b4c0582340032282af5
+      size: 7872
+    - path: data/artifacts/3d/test_volume_stats.json
+      hash: md5
+      md5: 9540184079a5a34d5f0abe6ea0a2bc66
+      size: 336
+  compute_3d_test_coherence:
+    cmd: python scripts/3d/compute_z_coherence_metrics.py --volume-nifti 
+      data/artifacts/3d/test_volume.nii.gz --output-json 
+      data/artifacts/3d/test_coherence.json
+    deps:
+    - path: data/artifacts/3d/test_volume.nii.gz
+      hash: md5
+      md5: c879bf043c560b4c0582340032282af5
+      size: 7872
+    - path: scripts/3d/compute_z_coherence_metrics.py
+      hash: md5
+      md5: 71f4c06142ba3bcb8ac0109b76bb618c
+      size: 7123
+    outs:
+    - path: data/artifacts/3d/test_coherence.json
+      hash: md5
+      md5: 101f5876f175a2c50b2c4d69803d364a
+      size: 506
+  generate_3d_synthetic_slices:
+    cmd: python scripts/3d/generate_synthetic_slices.py --num-slices 10 --height
+      256 --width 256 --pattern gradient --output-dir 
+      data/artifacts/3d/synthetic_slices --stats-json 
+      data/artifacts/3d/synthetic_slices_stats.json
+    deps:
+    - path: scripts/3d/generate_synthetic_slices.py
+      hash: md5
+      md5: d0bcf4c0f5fe98d88ddc7e0ad462b713
+      size: 3603
+    outs:
+    - path: data/artifacts/3d/synthetic_slices
+      hash: md5
+      md5: 29045b250b5efe4d8ef580c7f69d6a8c.dir
+      size: 83241
+      nfiles: 10
+    - path: data/artifacts/3d/synthetic_slices_stats.json
+      hash: md5
+      md5: adf655db1a5e24984d9df67f328759e1
+      size: 191
+  run_3d_volume_inpaint_tile_smoke:
+    cmd: python scripts/3d/run_volume_inpaint_pipeline.py --slice-glob 
+      "data/artifacts/3d/synthetic_slices/slice_*.png" --volume-id tile_smoke 
+      --coarse-label non_cancer --num-slices 10 --mask-radius 0.3 --strict-bbox 
+      --patch-size 512 --output-dir data/artifacts/3d/tile_inpaint_runs 
+      --dry-run
+    deps:
+    - path: data/artifacts/3d/synthetic_slices
+      hash: md5
+      md5: 29045b250b5efe4d8ef580c7f69d6a8c.dir
+      size: 83241
+      nfiles: 10
+    - path: scripts/3d/compute_z_coherence_metrics.py
+      hash: md5
+      md5: 71f4c06142ba3bcb8ac0109b76bb618c
+      size: 7123
+    - path: scripts/3d/propagate_mask_across_slices.py
+      hash: md5
+      md5: a3981f3f5f2c6e93c607b776b9db6641
+      size: 5429
+    - path: scripts/3d/run_volume_inpaint_pipeline.py
+      hash: md5
+      md5: 0598149db5fefbc207fe9a235c60878a
+      size: 40133
+    - path: scripts/3d/stack_slices_to_nifti.py
+      hash: md5
+      md5: 4569df7c95d184c975c4f85f8f38faea
+      size: 4095
+    - path: scripts/patches/extract_roi_patches.py
+      hash: md5
+      md5: f4f166a6dbc568be0415a4537f24aec6
+      size: 15056
+    - path: scripts/patches/inpaint_roi_patches.py
+      hash: md5
+      md5: fac93be719fd810a3b55481768161593
+      size: 7936
+    - path: scripts/patches/merge_inpainted_patches.py
+      hash: md5
+      md5: 37cd358b317e09cb20d48253646ef00b
+      size: 6777
+    outs:
+    - path: data/artifacts/3d/tile_inpaint_runs
+      hash: md5
+      md5: 83c5a66a229fa68343eadb3ffe5b3726.dir
+      size: 22828
+      nfiles: 17
+  run_3d_volume_inpaint_smoke:
+    cmd: python scripts/3d/run_volume_inpaint_pipeline.py --slice-glob 
+      "data/artifacts/3d/synthetic_slices/slice_*.png" --volume-id test_vol 
+      --coarse-label non_cancer --num-slices 10 --slice-height 256 --slice-width
+      256 --mask-radius 0.3 --output-dir data/artifacts/3d/volume_inpaint_runs 
+      --dry-run
+    deps:
+    - path: data/artifacts/3d/synthetic_slices
+      hash: md5
+      md5: 29045b250b5efe4d8ef580c7f69d6a8c.dir
+      size: 83241
+      nfiles: 10
+    - path: scripts/3d/build_volume_inpaint_metadata.py
+      hash: md5
+      md5: f134911f9fb7b4f20b567237ec3e8476
+      size: 6042
+    - path: scripts/3d/compute_z_coherence_metrics.py
+      hash: md5
+      md5: 71f4c06142ba3bcb8ac0109b76bb618c
+      size: 7123
+    - path: scripts/3d/propagate_mask_across_slices.py
+      hash: md5
+      md5: a3981f3f5f2c6e93c607b776b9db6641
+      size: 5429
+    - path: scripts/3d/run_volume_inpaint_pipeline.py
+      hash: md5
+      md5: 0598149db5fefbc207fe9a235c60878a
+      size: 40133
+    - path: scripts/3d/stack_slices_to_nifti.py
+      hash: md5
+      md5: 4569df7c95d184c975c4f85f8f38faea
+      size: 4095
+    - path: scripts/patches/inpaint_roi_patches.py
+      hash: md5
+      md5: fac93be719fd810a3b55481768161593
+      size: 7936
+    outs:
+    - path: data/artifacts/3d/volume_inpaint_runs
+      hash: md5
+      md5: f0e207169a903799843e1ebc5263391f.dir
+      size: 22773
+      nfiles: 17

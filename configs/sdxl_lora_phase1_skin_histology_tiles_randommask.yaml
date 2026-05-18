@@ -18,17 +18,26 @@ train_batch_size: 1
 gradient_accumulation_steps: 4
 dataset_repeats: 1
 sample_every_n_steps: 200
+sample_every_n_epochs: 1
 sample_sampler: "ddim"
 sample_steps: 35
-sample_guidance_scale: 5.0
+sample_guidance_scale: 3.5
 sample_negative_prompt: "lowres,blurry,artifact,painting,illustration,cartoon,geometric pattern,abstract art"
-sample_prompt_template: "H&E stained skin histopathology tile, diagnosis: {token}{descriptor_suffix}, realistic microscopy"
+sample_prompt_template: "H&E stained skin histopathology tile, {token}, realistic microscopy"
 sample_init_image: data/artifacts/tiles/sample_preview_init.png
 sample_mask_image: data/artifacts/tiles/sample_preview_mask.png
+sample_preview_mode: "multi_case"
+sample_preview_case_count: 10
+sample_preview_min_area_frac: 0.05
+sample_preview_max_area_frac: 0.16
 sample_denoising_strength: 0.55
-sample_mask_blur_radius: 4.0
+sample_mask_strength: 0.9
+sample_mask_blur_radius: 6.0
 sample_prompts_per_class: 3
-sample_use_class_descriptors: true
+sample_tokens:
+  - non_cancer
+  - cancer
+sample_use_class_descriptors: false
 sample_class_descriptors:
   non_cancer: "normal skin tissue architecture, preserved stratification"
   cancer: "malignant skin histology pattern with dysplastic morphology"
@@ -37,8 +46,9 @@ sample_seed_base: 222
 
 max_train_epochs: 5
 lr_warmup_steps: 200
-save_every_n_epochs: 1
-noise_offset: 0.05
+save_every_n_steps: 200
+save_every_n_epochs: 5
+noise_offset: 0.0
 optimizer_type: "AdamW8bit"
 gradient_checkpointing: true
 min_snr_gamma: 5
@@ -47,8 +57,8 @@ mixed_precision: "fp16"
 attn_backend: "sdpa"
 seed: 222
 
-caption_template: "H&E stained skin histopathology tile, diagnosis: {token}{descriptor_suffix}, realistic microscopy"
-caption_use_class_descriptors: true
+caption_template: "H&E stained skin histopathology tile, {token}, realistic microscopy"
+caption_use_class_descriptors: false
 caption_class_descriptors:
   non_cancer: "normal skin tissue architecture, preserved stratification"
   cancer: "malignant skin histology pattern with dysplastic morphology"
@@ -59,17 +69,19 @@ lora_lr: 5e-5
 lora_train_text_encoder: false
 lora_train_unet_only: true
 lora_te_only: false
-extra_train_args: []
+extra_train_args:
+  - --save_state
 
 lora_use_masked_loss: true
 lora_mask_mode: directory
 lora_mask_dir: data/artifacts/tiles/masks_random_512
-lora_mask_feather_radius: 0.0
-lora_mask_strength: 1.0
+lora_mask_feather_radius: 6.0
+lora_mask_strength: 0.7
 lora_mask_processed_dir: null
+lora_random_mask_shape_mode: round_blob
 lora_random_mask_seed: 222
-lora_random_mask_min_area_frac: 0.12
-lora_random_mask_max_area_frac: 0.40
+lora_random_mask_min_area_frac: 0.05
+lora_random_mask_max_area_frac: 0.16
 lora_random_mask_max_attempts: 30
 lora_random_mask_min_strokes: 1
 lora_random_mask_max_strokes: 4
@@ -77,7 +89,7 @@ lora_random_mask_min_vertices: 3
 lora_random_mask_max_vertices: 8
 lora_random_mask_min_brush_px: 24
 lora_random_mask_max_brush_px: 128
-lora_random_mask_tissue_min_overlap: 0.0
+lora_random_mask_tissue_min_overlap: 0.75
 
 output_dir: outputs/finetunes/skin_histology_phase1_tiles_randommask
 logs_dir: outputs/logs/skin_histology_phase1_tiles_randommask

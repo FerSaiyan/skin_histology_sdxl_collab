@@ -12,3 +12,13 @@ outputs/finetunes/**/run10/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# Testing artifacts
+.pytest_cache/
+
+# MCX simulation output files (*.jnii JNIfTI, *.jdat JData)
+*.jnii
+*.jdat
+
+# External reference clones (each is a separate git repo)
+external_refs/*/

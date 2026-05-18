@@ -413,9 +413,14 @@ def _prepare_mask_variant(
     raw_mask: Image.Image,
     feather_radius: float,
     dilate_px: float,
+    mask_strength: float,
 ) -> dict:
     mask = _dilate_mask(raw_mask, dilate_px=dilate_px)
     mask_soft = mask.filter(ImageFilter.GaussianBlur(radius=float(feather_radius))) if feather_radius > 0 else mask
+    if abs(float(mask_strength) - 1.0) > 1e-6:
+        arr = np.asarray(mask_soft.convert("L"), dtype=np.float32) * float(mask_strength)
+        arr = np.clip(arr, 0.0, 255.0).astype(np.uint8)
+        mask_soft = Image.fromarray(arr, mode="L")
     return {
         "mask_soft": mask_soft,
         "overlay": _make_overlay(image, mask_soft),
@@ -660,6 +665,7 @@ def main() -> None:
     )
     ap.add_argument("--lora-scale", type=float, default=0.75)
     ap.add_argument("--mask-feather-radius", type=float, default=6.0)
+    ap.add_argument("--mask-strength", type=float, default=1.0, help="Scale grayscale mask values before inpainting.")
     ap.add_argument(
         "--same-class-mask-dilate-px",
         type=float,
@@ -902,6 +908,7 @@ def main() -> None:
                         raw_mask=source_inputs["raw_mask"],
                         feather_radius=float(args.mask_feather_radius),
                         dilate_px=float(task["mask_dilate_px"]),
+                        mask_strength=float(args.mask_strength),
                     )
                     reused_existing = False
                     if gen_path.is_file() and not args.force_regenerate:
@@ -1019,6 +1026,7 @@ def main() -> None:
             raw_mask=source_inputs["raw_mask"],
             feather_radius=float(args.mask_feather_radius),
             dilate_px=float(sample_row.get("mask_dilate_px", 0.0)),
+            mask_strength=float(args.mask_strength),
         )["overlay"]
         panel_mode = sample_row["prompt_mode"]
         panel_path = out_dir / "panels" / panel_mode / f"{source_key}__to__{target_label}.png"
@@ -1072,6 +1080,7 @@ def main() -> None:
             "cross_class_target_strengths": cross_class_target_strengths,
             "lora_scale": float(args.lora_scale),
             "mask_feather_radius": float(args.mask_feather_radius),
+            "mask_strength": float(args.mask_strength),
             "same_class_mask_dilate_px": float(args.same_class_mask_dilate_px),
             "cross_class_mask_dilate_px": float(args.cross_class_mask_dilate_px),
             "cross_class_target_mask_dilate": cross_class_target_mask_dilate,

@@ -9,8 +9,12 @@ Primary goal:
 - train SDXL LoRA inpainting in Phase 1/2/3 loops,
 - support synthetic slice variation workflows for downstream 3D volume/simulation studies.
 
-Dataset target:
+Dataset targets:
 - Mendeley Histo-Seg dataset `vccj8mp2cg` (version `2`).
+- Histo-Seg is 2D only — for 3D volume MVP, see the `docs/MVP_3D_INPAINTING_PLAN.md`.
+
+**Constraint:** No large dataset downloads (MATRICS-A, hundreds of GB) for now.
+MVP development uses only existing Histo-Seg data + synthetic circular masks.
 
 
 ## Repo Layout
@@ -23,8 +27,10 @@ Dataset target:
 - `scripts/render_runtime_configs.py`: renders runtime phase configs from templates + params.
 - `scripts/run_gradcam_from_params.py`: runs Grad-CAM mask generation from params.
 - `scripts/synthetic_data/`: vendored core training/selection/benchmark scripts.
+- `scripts/3d/`: 3D slice-stack coherence MVP scripts plus Phase B/B.1 volume inpainting pipeline (propagate mask, stack to NIfTI, Z-coherence metrics, metadata builder, tile-first orchestrator, synthetic slice generator).
 - `scripts/setup_kohya_sd_scripts.sh`: helper to clone kohya scripts locally.
 - `src/`: minimal modules needed by synthetic scripts.
+- `docs/MVP_3D_INPAINTING_PLAN.md`: detailed plan for 3D-coherent inpainting.
 
 
 ## Agent Mission
@@ -121,6 +127,24 @@ dvc repro train_skin_lora_phase2
 dvc repro train_skin_lora_phase3
 ```
 
+9. `generate_3d_test_masks` (optional, self-contained)
+10. `stack_3d_test_volume` (optional, depends on stage 9)
+11. `compute_3d_test_coherence` (optional, depends on stage 10)
+12. `generate_3d_synthetic_slices` (optional, Phase B smoke test)
+13. `run_3d_volume_inpaint_smoke` (optional, depends on stage 12)
+14. `run_3d_volume_inpaint_tile_smoke` (optional, Phase B.1 tile-first smoke test, depends on stage 12)
+
+Phase B.1 is the **preferred flow** for high-res volumes: it avoids full-slice
+resizing by extracting ROI patches around the mask, inpainting at model
+resolution, and merging back.
+
+**Recommended: use `--strict-bbox` mode** for no-padding/no-square extraction.
+This validates raw bbox width AND height ≤ `--patch-size` (default 512 in
+strict mode).  The `--padding-ratio` is ignored in strict mode.
+
+Key arguments: `--strict-bbox` (flag), `--patch-size` (crop size),
+`--target-size` (model resolution).
+
 For heavy stages, `dvc repro <stage> --single-item` is preferred.
 
 
@@ -172,6 +196,14 @@ python scripts/synthetic_data/build_roi_masks_gradcam.py --help
 python scripts/synthetic_data/finetune_stable_diffusion_unified.py --help
 python scripts/synthetic_data/phase2_reward_guided_lora.py --help
 python scripts/synthetic_data/phase3_morph_reward_guided_lora.py --help
+python scripts/3d/propagate_mask_across_slices.py --help
+python scripts/3d/stack_slices_to_nifti.py --help
+python scripts/3d/compute_z_coherence_metrics.py --help
+python scripts/3d/generate_synthetic_slices.py --help
+python scripts/3d/build_volume_inpaint_metadata.py --help
+python scripts/3d/run_volume_inpaint_pipeline.py --help
+python scripts/patches/extract_roi_patches.py --help
+python scripts/patches/merge_inpainted_patches.py --help
 ```
 
 

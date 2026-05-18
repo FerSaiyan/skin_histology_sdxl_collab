@@ -161,6 +161,8 @@ def train(args) -> None:
     history_path = out_dir / "train_history.json"
 
     best_f1 = -1.0
+    best_epoch = -1
+    epochs_without_improve = 0
     history: List[Dict[str, float]] = []
 
     for epoch in range(args.epochs):
@@ -212,7 +214,18 @@ def train(args) -> None:
 
         if val_metrics["val_f1"] > best_f1:
             best_f1 = val_metrics["val_f1"]
+            best_epoch = epoch + 1
+            epochs_without_improve = 0
             torch.save(model.state_dict(), best_ckpt)
+        else:
+            epochs_without_improve += 1
+
+        if epochs_without_improve >= args.patience:
+            print(
+                f"Early stopping at epoch {epoch+1}: no val_f1 improvement for {args.patience} epochs "
+                f"(best_epoch={best_epoch}, best_val_f1={best_f1:.4f})"
+            )
+            break
 
     history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
     split_meta = {
@@ -221,6 +234,8 @@ def train(args) -> None:
         "train_volumes": sorted(train_df["volume_id"].astype(str).unique().tolist()),
         "val_volumes": sorted(val_df["volume_id"].astype(str).unique().tolist()),
         "best_val_f1": float(best_f1),
+        "best_epoch": int(best_epoch),
+        "patience": int(args.patience),
         "checkpoint": str(best_ckpt),
     }
     (out_dir / "split_and_metrics.json").write_text(json.dumps(split_meta, indent=2), encoding="utf-8")
@@ -236,6 +251,7 @@ def parse_args():
     ap.add_argument("--output-dir", default="outputs/classifiers")
     ap.add_argument("--checkpoint-name", default="histoseg_effnet_b0_binary.pth")
     ap.add_argument("--epochs", type=int, default=20)
+    ap.add_argument("--patience", type=int, default=5)
     ap.add_argument("--head-warmup-epochs", type=int, default=5)
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--num-workers", type=int, default=2)

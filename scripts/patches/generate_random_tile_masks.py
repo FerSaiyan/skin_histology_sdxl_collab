@@ -18,6 +18,152 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 
+def _keep_largest_connected_component(mask_arr: np.ndarray) -> np.ndarray:
+    """
+    Return the largest 4-connected component from a binary mask.
+    Uses pure numpy BFS/flood fill - no scipy dependency.
+    Returns zeros if no component found.
+    """
+    binary = (mask_arr > 0).astype(np.uint8)
+    if binary.sum() == 0:
+        return np.zeros_like(mask_arr, dtype=mask_arr.dtype)
+
+    h, w = binary.shape
+    visited = np.zeros_like(binary, dtype=bool)
+    max_size = 0
+    best_component = None
+
+    # 4-connectivity neighbors: up, down, left, right
+    neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    for r in range(h):
+        for c in range(w):
+            if binary[r, c] and not visited[r, c]:
+                # BFS from (r,c)
+                queue = [(r, c)]
+                visited[r, c] = True
+                component = []
+                while queue:
+                    cr, cc = queue.pop()
+                    component.append((cr, cc))
+                    for dr, dc in neighbors:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w:
+                            if binary[nr, nc] and not visited[nr, nc]:
+                                visited[nr, nc] = True
+                                queue.append((nr, nc))
+                size = len(component)
+                if size > max_size:
+                    max_size = size
+                    best_component = component
+
+    if best_component is None or max_size == 0:
+        return np.zeros_like(mask_arr, dtype=mask_arr.dtype)
+
+    out = np.zeros_like(mask_arr, dtype=mask_arr.dtype)
+    for r, c in best_component:
+        out[r, c] = mask_arr[r, c]
+    return out
+
+
+def _sample_random_mask(
+    *,
+    shape_mode: str,
+    width: int,
+    height: int,
+    rng: np.random.Generator,
+    min_area_frac: float,
+    max_area_frac: float,
+    min_strokes: int,
+    max_strokes: int,
+    min_vertices: int,
+    max_vertices: int,
+    min_brush_px: int,
+    max_brush_px: int,
+) -> np.ndarray:
+    if shape_mode == "ellipse_union":
+        return _sample_ellipse_union_mask(
+            width=width,
+            height=height,
+            rng=rng,
+            min_area_frac=min_area_frac,
+            max_area_frac=max_area_frac,
+        )
+    elif shape_mode == "round_blob":
+        return _sample_round_blob_mask(
+            width=width,
+            height=height,
+            rng=rng,
+            min_area_frac=min_area_frac,
+            max_area_frac=max_area_frac,
+        )
+    else:
+        return _sample_random_brush_mask(
+            width=width,
+            height=height,
+            rng=rng,
+            min_area_frac=min_area_frac,
+            max_area_frac=max_area_frac,
+            min_strokes=min_strokes,
+            max_strokes=max_strokes,
+            min_vertices=min_vertices,
+            max_vertices=max_vertices,
+            min_brush_px=min_brush_px,
+            max_brush_px=max_brush_px,
+        )
+
+
+def _sample_ellipse_union_mask(
+    *,
+    width: int,
+    height: int,
+    rng: np.random.Generator,
+    min_area_frac: float,
+    max_area_frac: float,
+) -> np.ndarray:
+    canvas = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(canvas)
+
+    n_ellipses = int(rng.integers(1, 4))
+    for _ in range(n_ellipses):
+        rx = int(rng.integers(width // 8, width // 3))
+        ry = int(rng.integers(height // 8, height // 3))
+        cx = int(rng.integers(rx, width - rx))
+        cy = int(rng.integers(ry, height - ry))
+        draw.ellipse((cx - rx, cy - ry, cx + rx, cy + ry), fill=255)
+
+    arr = np.asarray(canvas, dtype=np.uint8)
+    frac = float((arr > 0).mean())
+    if frac < min_area_frac or frac > max_area_frac:
+        return np.zeros_like(arr)
+    return arr
+
+
+def _sample_round_blob_mask(
+    *,
+    width: int,
+    height: int,
+    rng: np.random.Generator,
+    min_area_frac: float,
+    max_area_frac: float,
+) -> np.ndarray:
+    canvas = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(canvas)
+
+    n_blobs = int(rng.integers(1, 3))
+    for _ in range(n_blobs):
+        cx = int(rng.integers(width // 6, width - width // 6))
+        cy = int(rng.integers(height // 6, height - height // 6))
+        r = int(rng.integers(min(width, height) // 8, min(width, height) // 4))
+        draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=255)
+
+    arr = np.asarray(canvas, dtype=np.uint8)
+    frac = float((arr > 0).mean())
+    if frac < min_area_frac or frac > max_area_frac:
+        return np.zeros_like(arr)
+    return arr
+
+
 def _sample_random_brush_mask(
     *,
     width: int,
@@ -81,6 +227,7 @@ def _generate_one(
     feather_radius: float,
     mask_strength: float,
     overwrite: bool,
+    shape_mode: str,
 ) -> Dict[str, int]:
     out_path = out_dir / img_path.name
     if out_path.exists() and not overwrite:
@@ -96,7 +243,8 @@ def _generate_one(
     rng = np.random.default_rng(int(seed) + int(idx) * 10007)
     mask_arr = None
     for _ in range(max(1, int(max_attempts))):
-        cand = _sample_random_brush_mask(
+        cand = _sample_random_mask(
+            shape_mode=shape_mode,
             width=w,
             height=h,
             rng=rng,
@@ -111,6 +259,15 @@ def _generate_one(
         )
         if cand.max() == 0:
             continue
+        # Keep largest connected component
+        cand = _keep_largest_connected_component(cand)
+        if cand.max() == 0:
+            continue
+        # Enforce area fraction bounds after component filtering
+        frac = float((cand > 0).mean())
+        if frac < min_area_frac or frac > max_area_frac:
+            continue
+        # Check tissue overlap
         if tissue_min_overlap > 0:
             m = cand > 0
             overlap = float(np.logical_and(m, tissue).sum()) / float(max(m.sum(), 1))
@@ -163,6 +320,7 @@ def main() -> None:
     ap.add_argument("--feather-radius", type=float, default=0.0)
     ap.add_argument("--mask-strength", type=float, default=1.0)
     ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--shape-mode", type=str, default="brush", choices=["brush", "ellipse_union", "round_blob"])
     ap.add_argument("--stats-json", default=None)
     args = ap.parse_args()
 
@@ -205,6 +363,7 @@ def main() -> None:
                     feather_radius=float(args.feather_radius),
                     mask_strength=float(args.mask_strength),
                     overwrite=bool(args.overwrite),
+                    shape_mode=str(args.shape_mode),
                 )
             )
 

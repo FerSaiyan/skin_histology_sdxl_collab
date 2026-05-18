@@ -164,7 +164,13 @@ def _coerce_prompt_list(raw) -> list[str]:
     return [str(raw)]
 
 
-def _extract_diagnosis_token(text: str) -> str:
+def _extract_diagnosis_token(text: str, known_tokens: list[str] | None = None) -> str:
+    if known_tokens:
+        hay = str(text)
+        for tok in sorted({str(t).strip() for t in known_tokens if str(t).strip()}, key=len, reverse=True):
+            pat = rf"(?<![A-Za-z0-9_]){re.escape(tok)}(?![A-Za-z0-9_])"
+            if re.search(pat, hay, flags=re.IGNORECASE):
+                return tok
     m = re.search(r"(?:diagnosis|tissue\s*pattern):\s*([A-Za-z0-9_]+)", text, flags=re.IGNORECASE)
     if m:
         return m.group(1)
@@ -179,6 +185,14 @@ def _as_optional_path(raw, base_dir: Path) -> Path | None:
     if not p.is_absolute():
         p = (base_dir / p).resolve()
     return p
+
+
+def _mask_area_fraction(mask_path: Path, threshold: int = 127) -> float:
+    with Image.open(mask_path) as pil_mask:
+        arr = np.asarray(pil_mask.convert("L"), dtype=np.uint8)
+    if arr.size == 0:
+        return 0.0
+    return float((arr > int(threshold)).mean())
 
 
 def _prepare_soft_masks_for_training(
@@ -345,6 +359,152 @@ def _binary_tissue_mask_from_row_meta(
     return tissue
 
 
+def _keep_largest_connected_component(mask_arr: np.ndarray) -> np.ndarray:
+    """
+    Return the largest 4-connected component from a binary mask.
+    Uses pure numpy BFS/flood fill - no scipy dependency.
+    Returns zeros if no component found.
+    """
+    binary = (mask_arr > 0).astype(np.uint8)
+    if binary.sum() == 0:
+        return np.zeros_like(mask_arr, dtype=mask_arr.dtype)
+
+    h, w = binary.shape
+    visited = np.zeros_like(binary, dtype=bool)
+    max_size = 0
+    best_component = None
+
+    # 4-connectivity neighbors: up, down, left, right
+    neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    for r in range(h):
+        for c in range(w):
+            if binary[r, c] and not visited[r, c]:
+                # BFS from (r,c)
+                queue = [(r, c)]
+                visited[r, c] = True
+                component = []
+                while queue:
+                    cr, cc = queue.pop()
+                    component.append((cr, cc))
+                    for dr, dc in neighbors:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < h and 0 <= nc < w:
+                            if binary[nr, nc] and not visited[nr, nc]:
+                                visited[nr, nc] = True
+                                queue.append((nr, nc))
+                size = len(component)
+                if size > max_size:
+                    max_size = size
+                    best_component = component
+
+    if best_component is None or max_size == 0:
+        return np.zeros_like(mask_arr, dtype=mask_arr.dtype)
+
+    out = np.zeros_like(mask_arr, dtype=mask_arr.dtype)
+    for r, c in best_component:
+        out[r, c] = mask_arr[r, c]
+    return out
+
+
+def _sample_random_mask(
+    *,
+    shape_mode: str,
+    width: int,
+    height: int,
+    rng: np.random.Generator,
+    min_area_frac: float,
+    max_area_frac: float,
+    min_strokes: int,
+    max_strokes: int,
+    min_vertices: int,
+    max_vertices: int,
+    min_brush_px: int,
+    max_brush_px: int,
+) -> np.ndarray:
+    if shape_mode == "ellipse_union":
+        return _sample_ellipse_union_mask(
+            width=width,
+            height=height,
+            rng=rng,
+            min_area_frac=min_area_frac,
+            max_area_frac=max_area_frac,
+        )
+    elif shape_mode == "round_blob":
+        return _sample_round_blob_mask(
+            width=width,
+            height=height,
+            rng=rng,
+            min_area_frac=min_area_frac,
+            max_area_frac=max_area_frac,
+        )
+    else:
+        return _sample_random_brush_mask(
+            width=width,
+            height=height,
+            rng=rng,
+            min_area_frac=min_area_frac,
+            max_area_frac=max_area_frac,
+            min_strokes=min_strokes,
+            max_strokes=max_strokes,
+            min_vertices=min_vertices,
+            max_vertices=max_vertices,
+            min_brush_px=min_brush_px,
+            max_brush_px=max_brush_px,
+        )
+
+
+def _sample_ellipse_union_mask(
+    *,
+    width: int,
+    height: int,
+    rng: np.random.Generator,
+    min_area_frac: float,
+    max_area_frac: float,
+) -> np.ndarray:
+    canvas = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(canvas)
+
+    n_ellipses = int(rng.integers(1, 4))
+    for _ in range(n_ellipses):
+        rx = int(rng.integers(width // 8, width // 3))
+        ry = int(rng.integers(height // 8, height // 3))
+        cx = int(rng.integers(rx, width - rx))
+        cy = int(rng.integers(ry, height - ry))
+        draw.ellipse((cx - rx, cy - ry, cx + rx, cy + ry), fill=255)
+
+    arr = np.asarray(canvas, dtype=np.uint8)
+    frac = float((arr > 0).mean())
+    if frac < min_area_frac or frac > max_area_frac:
+        return np.zeros_like(arr)
+    return arr
+
+
+def _sample_round_blob_mask(
+    *,
+    width: int,
+    height: int,
+    rng: np.random.Generator,
+    min_area_frac: float,
+    max_area_frac: float,
+) -> np.ndarray:
+    canvas = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(canvas)
+
+    n_blobs = int(rng.integers(1, 3))
+    for _ in range(n_blobs):
+        cx = int(rng.integers(width // 6, width - width // 6))
+        cy = int(rng.integers(height // 6, height - height // 6))
+        r = int(rng.integers(min(width, height) // 8, min(width, height) // 4))
+        draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=255)
+
+    arr = np.asarray(canvas, dtype=np.uint8)
+    frac = float((arr > 0).mean())
+    if frac < min_area_frac or frac > max_area_frac:
+        return np.zeros_like(arr)
+    return arr
+
+
 def _sample_random_brush_mask(
     *,
     width: int,
@@ -406,6 +566,7 @@ def _prepare_random_masks_for_training(
     min_brush_px: int,
     max_brush_px: int,
     tissue_min_overlap: float,
+    shape_mode: str,
 ) -> Path:
     image_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif", ".jxl"}
     dataset_images = [p for p in dataset_path.iterdir() if p.suffix.lower() in image_exts]
@@ -433,7 +594,8 @@ def _prepare_random_masks_for_training(
 
         mask_arr = None
         for _ in range(max(1, int(max_attempts))):
-            cand = _sample_random_brush_mask(
+            cand = _sample_random_mask(
+                shape_mode=shape_mode,
                 width=w,
                 height=h,
                 rng=rng,
@@ -448,6 +610,15 @@ def _prepare_random_masks_for_training(
             )
             if cand.max() == 0:
                 continue
+            # Keep largest connected component
+            cand = _keep_largest_connected_component(cand)
+            if cand.max() == 0:
+                continue
+            # Enforce area fraction bounds after component filtering
+            frac = float((cand > 0).mean())
+            if frac < min_area_frac or frac > max_area_frac:
+                continue
+            # Check tissue overlap
             if tissue is not None:
                 m = cand > 0
                 overlap = float(np.logical_and(m, tissue > 0).sum()) / float(max(m.sum(), 1))
@@ -635,6 +806,9 @@ def main(args):
     lora_random_mask_min_brush_px = int(cfg.get("lora_random_mask_min_brush_px", 24))
     lora_random_mask_max_brush_px = int(cfg.get("lora_random_mask_max_brush_px", 128))
     lora_random_mask_tissue_min_overlap = float(cfg.get("lora_random_mask_tissue_min_overlap", 0.0))
+    lora_random_mask_shape_mode = str(cfg.get("lora_random_mask_shape_mode", "brush")).strip().lower()
+    if lora_random_mask_shape_mode not in {"brush", "ellipse_union", "round_blob"}:
+        raise SystemExit("lora_random_mask_shape_mode must be one of: brush, ellipse_union, round_blob")
     # ───────────────────── 1. Paths e pastas ─────────────────────
     materialize_from_csv = bool(cfg.get('materialize_from_labels_csv', False))
     dataset_path = Path(
@@ -869,16 +1043,18 @@ def main(args):
             cap_path.write_text(caption_text.strip(), encoding="utf-8")
 
 
-    # quick sanity-check (remove or comment out later)
+    # quick sanity-check
     from collections import Counter, defaultdict
 
+    known_caption_tokens = sorted({str(v).strip() for v in label_dict.values() if str(v).strip()})
     token_counts = Counter()
-    examples      = defaultdict(list)
+    examples = defaultdict(list)
 
     for img in dataset_path.iterdir():
         if img.suffix.lower() not in EXTS:
             continue
-        token = _extract_diagnosis_token(img.with_suffix(".caption").read_text())
+        caption_text = img.with_suffix(".caption").read_text(encoding="utf-8", errors="ignore")
+        token = _extract_diagnosis_token(caption_text, known_tokens=known_caption_tokens)
         token_counts[token] += 1
         if len(examples[token]) < 3:
             examples[token].append(img.name)
@@ -889,7 +1065,14 @@ def main(args):
 
     # ───────────────────── 3. Prompts de amostragem ────────────────────
     prompts = SD / "prompts_to_check.txt"
-    coarse_tokens = ["healthy", "benign_lesion", "opmd", "cancer"]
+    sample_tokens_cfg = cfg.get("sample_tokens", None)
+    if isinstance(sample_tokens_cfg, str):
+        coarse_tokens = [x.strip() for x in sample_tokens_cfg.split(",") if x.strip()]
+    elif isinstance(sample_tokens_cfg, (list, tuple)):
+        coarse_tokens = [str(x).strip() for x in sample_tokens_cfg if str(x).strip()]
+    else:
+        inferred_tokens = sorted(set(label_dict.values())) if label_dict else sorted(token_counts.keys())
+        coarse_tokens = inferred_tokens if inferred_tokens else ["healthy", "benign_lesion", "opmd", "cancer"]
     sample_class_descriptors = {
         tok: str(sample_class_descriptors_cfg.get(tok, default_class_descriptors.get(tok, ""))).strip()
         for tok in coarse_tokens
@@ -935,15 +1118,108 @@ def main(args):
 
     sample_init_image = _as_optional_path(cfg.get("sample_init_image"), project_path)
     sample_mask_image = _as_optional_path(cfg.get("sample_mask_image"), project_path)
+    sample_init_images = [
+        _as_optional_path(x, project_path)
+        for x in _coerce_prompt_list(cfg.get("sample_init_images"))
+    ]
+    sample_mask_images = [
+        _as_optional_path(x, project_path)
+        for x in _coerce_prompt_list(cfg.get("sample_mask_images"))
+    ]
+    sample_preview_mode = str(cfg.get("sample_preview_mode", "fixed")).strip().lower()
+    if sample_preview_mode not in {"fixed", "multi_case"}:
+        raise SystemExit("sample_preview_mode must be one of: fixed, multi_case")
+    sample_preview_case_count = int(cfg.get("sample_preview_case_count", max(1, len(coarse_tokens))))
+    if sample_preview_case_count < 1:
+        raise SystemExit("sample_preview_case_count must be >= 1")
+    sample_preview_image_dir = _as_optional_path(cfg.get("sample_preview_image_dir"), project_path)
+    sample_preview_mask_dir = _as_optional_path(cfg.get("sample_preview_mask_dir"), project_path)
+    sample_preview_min_area_frac_raw = cfg.get("sample_preview_min_area_frac", None)
+    sample_preview_max_area_frac_raw = cfg.get("sample_preview_max_area_frac", None)
+    sample_preview_min_area_frac = (
+        float(sample_preview_min_area_frac_raw)
+        if sample_preview_min_area_frac_raw not in (None, "", "null")
+        else None
+    )
+    sample_preview_max_area_frac = (
+        float(sample_preview_max_area_frac_raw)
+        if sample_preview_max_area_frac_raw not in (None, "", "null")
+        else None
+    )
+
     if sample_init_image is not None and not sample_init_image.is_file():
         raise SystemExit(f"sample_init_image does not exist: {sample_init_image}")
     if sample_mask_image is not None and not sample_mask_image.is_file():
         raise SystemExit(f"sample_mask_image does not exist: {sample_mask_image}")
     if sample_mask_image is not None and sample_init_image is None:
         raise SystemExit("sample_mask_image requires sample_init_image to be set")
+
+    if sample_init_images and not sample_mask_images:
+        raise SystemExit("sample_init_images requires sample_mask_images")
+    if sample_mask_images and not sample_init_images:
+        raise SystemExit("sample_mask_images requires sample_init_images")
+    if sample_init_images and len(sample_init_images) != len(sample_mask_images):
+        raise SystemExit("sample_init_images and sample_mask_images must have equal lengths")
+
+    sample_preview_pairs: list[tuple[Path, Path]] = []
+    if sample_init_images and sample_mask_images:
+        for init_p, mask_p in zip(sample_init_images, sample_mask_images):
+            if init_p is None or mask_p is None:
+                continue
+            if not init_p.is_file():
+                raise SystemExit(f"sample_init_images contains missing file: {init_p}")
+            if not mask_p.is_file():
+                raise SystemExit(f"sample_mask_images contains missing file: {mask_p}")
+            sample_preview_pairs.append((init_p, mask_p))
+    elif sample_preview_mode == "multi_case":
+        image_dir = sample_preview_image_dir or dataset_path
+        mask_dir_for_preview = sample_preview_mask_dir or lora_mask_dir
+        if image_dir is None or not image_dir.is_dir():
+            raise SystemExit(f"sample_preview_image_dir is not a directory: {image_dir}")
+        if mask_dir_for_preview is None or not mask_dir_for_preview.is_dir():
+            raise SystemExit(
+                "sample_preview_mode=multi_case requires a valid mask directory; "
+                "set sample_preview_mask_dir or lora_mask_dir."
+            )
+        candidates: list[tuple[float, Path, Path]] = []
+        for p in sorted(mask_dir_for_preview.iterdir()):
+            if p.suffix.lower() not in EXTS:
+                continue
+            img_p = image_dir / p.name
+            if not img_p.is_file():
+                continue
+            frac = _mask_area_fraction(p)
+            if sample_preview_min_area_frac is not None and frac < sample_preview_min_area_frac:
+                continue
+            if sample_preview_max_area_frac is not None and frac > sample_preview_max_area_frac:
+                continue
+            candidates.append((frac, img_p, p))
+
+        if candidates:
+            candidates.sort(key=lambda x: x[0])
+            count = min(sample_preview_case_count, len(candidates))
+            idxs = np.unique(np.linspace(0, len(candidates) - 1, num=count, dtype=int))
+            chosen = [candidates[int(i)] for i in idxs]
+            if len(chosen) < count:
+                for item in candidates:
+                    if item in chosen:
+                        continue
+                    chosen.append(item)
+                    if len(chosen) >= count:
+                        break
+            sample_preview_pairs = [(img_p, mask_p) for _, img_p, mask_p in chosen[:count]]
+
+    if not sample_preview_pairs and sample_init_image is not None and sample_mask_image is not None:
+        sample_preview_pairs = [(sample_init_image, sample_mask_image)]
+
+    if sample_preview_pairs:
+        print(f"Using {len(sample_preview_pairs)} sample preview pair(s) for prompt snapshots.")
+        for i, (img_p, mask_p) in enumerate(sample_preview_pairs[:6], start=1):
+            print(f"  sample_pair[{i}] -> image={img_p.name}, mask={mask_p.name}")
+
     # Some samplers (notably k_dpm_2_a) are unstable for img2img/inpaint sampling in kohya.
     # When sample_init_image is set, force a safer sampler for sample previews.
-    if sample_init_image is not None and sample_sampler.lower() in {"k_dpm_2_a", "k_dpm_2"}:
+    if sample_preview_pairs and sample_sampler.lower() in {"k_dpm_2_a", "k_dpm_2"}:
         print(
             f"sample_sampler='{sample_sampler}' is unstable for inpaint/img2img sample previews; "
             "overriding to 'ddim'."
@@ -964,10 +1240,6 @@ def main(args):
         f"--l {sample_guidance_scale}",
         f"--s {sample_steps}",
     ]
-    if sample_init_image is not None:
-        sample_suffix_parts.append(f"--i {sample_init_image}")
-    if sample_mask_image is not None:
-        sample_suffix_parts.append(f"--m {sample_mask_image}")
     if sample_denoising_strength is not None:
         sample_suffix_parts.append(f"--t {sample_denoising_strength}")
     if abs(sample_mask_strength - 1.0) > 1e-6:
@@ -979,6 +1251,10 @@ def main(args):
         for token_idx, tok in enumerate(coarse_tokens):
             for prompt_idx, prompt_text in enumerate(_prompts_for_token(tok)):
                 line_parts = [prompt_text, *sample_suffix_parts]
+                if sample_preview_pairs:
+                    pair_idx = prompt_lines % len(sample_preview_pairs)
+                    init_p, mask_p = sample_preview_pairs[pair_idx]
+                    line_parts.extend([f"--i {init_p}", f"--m {mask_p}"])
                 prompt_seed = _seed_for_prompt(token_idx, prompt_idx)
                 if prompt_seed is not None:
                     line_parts.append(f"--d {prompt_seed}")
@@ -1148,6 +1424,7 @@ def main(args):
                     min_brush_px=lora_random_mask_min_brush_px,
                     max_brush_px=lora_random_mask_max_brush_px,
                     tissue_min_overlap=lora_random_mask_tissue_min_overlap,
+                    shape_mode=lora_random_mask_shape_mode,
                 )
             else:
                 raise SystemExit(f"Unsupported lora_mask_mode: {lora_mask_mode}")

@@ -45,17 +45,32 @@ def _load_inpaint_pipeline(
 
     torch_dtype = torch.float16 if dtype == "fp16" else torch.float32
 
-    try:
-        pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
+    # Detect single-file model (e.g. .safetensors/.ckpt) vs directory/repo id.
+    # Prefer filesystem type checks when the path exists locally.
+    # Fallback to extension-based detection for unresolved local paths.
+    model_path = Path(base_model)
+    if model_path.exists():
+        is_single_file = model_path.is_file()
+    else:
+        is_single_file = model_path.suffix.lower() in {".safetensors", ".ckpt"}
+
+    if is_single_file:
+        pipe = StableDiffusionXLInpaintPipeline.from_single_file(
             base_model,
             torch_dtype=torch_dtype,
-            variant="fp16" if dtype == "fp16" else None,
         )
-    except Exception:
-        pipe = AutoPipelineForInpainting.from_pretrained(
-            base_model,
-            torch_dtype=torch_dtype,
-        )
+    else:
+        try:
+            pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
+                base_model,
+                torch_dtype=torch_dtype,
+                variant="fp16" if dtype == "fp16" else None,
+            )
+        except Exception:
+            pipe = AutoPipelineForInpainting.from_pretrained(
+                base_model,
+                torch_dtype=torch_dtype,
+            )
 
     if lora_weights:
         pipe.load_lora_weights(lora_weights)
@@ -111,7 +126,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Run inpainting on ROI patches.")
     ap.add_argument("--metadata-csv", required=True, help="Path to patches_metadata.csv")
     ap.add_argument("--output-dir", required=True, help="Output directory for inpainted patches")
-    ap.add_argument("--base-model", required=True, help="Path to SDXL base model")
+    ap.add_argument("--base-model", default=None, help="Path to SDXL base model (required unless --dry-run)")
     ap.add_argument("--lora-weights", default=None, help="Path to LoRA weights")
     ap.add_argument("--device", default="cuda", help="Device for inference")
     ap.add_argument("--dtype", default="fp16", choices=["fp16", "fp32"])
@@ -124,6 +139,9 @@ def main() -> None:
     ap.add_argument("--max-patches", type=int, default=0, help="Limit patches (0 = all)")
     ap.add_argument("--dry-run", action="store_true", help="Print plan without running")
     args = ap.parse_args()
+
+    if not args.dry_run and not args.base_model:
+        ap.error("--base-model is required when not in --dry-run mode")
 
     import pandas as pd
 
