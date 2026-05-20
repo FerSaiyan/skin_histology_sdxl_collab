@@ -65,6 +65,10 @@ mcx:
   # actual value is set in mcx_config.json after build_volume step)
   photons: 1000000
 
+  # Optional MCX post-processing visuals (only meaningful when mode: run)
+  render_absorption_video: false
+  render_reflectance_spectrum: false
+
 # ---------------------------------------------------------------------------
 # Thermal (Pennes bioheat) simulation options
 # ---------------------------------------------------------------------------

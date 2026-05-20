@@ -16,6 +16,10 @@ Volume binary layout:
   MCX's column-major interpretation with Dim=[X,Y,Z].  No transpose is needed.
   Set ``OriginType=0`` for 0-based indexing (Python/C convention).
 
+Source orientation note:
+  Default source is placed at Z=0 with direction +Z (top -> bottom), i.e. from
+  air side toward epidermis if the top slices represent air/background.
+
 Optical defaults (Jacques 2013 / literature skin values):
   - label 0 (background/air):  μa=0.0001, μs=0.0001, g=1.0, n=1.0
   - label 1 (generic tissue): μa=0.02,   μs=10.0,  g=0.9, n=1.37
@@ -245,12 +249,26 @@ def _build_media_table(labels: np.ndarray) -> Dict[str, Any]:
     }
 
 
+def _air_fraction_top_bottom(labels: np.ndarray, air_label_id: int) -> tuple[float, float]:
+    """Return (top_air_fraction, bottom_air_fraction) for a (Z,Y,X) label volume."""
+    if labels.ndim != 3:
+        return 0.0, 0.0
+    top = labels[0, :, :]
+    bottom = labels[-1, :, :]
+    top_air = float((top == air_label_id).mean())
+    bottom_air = float((bottom == air_label_id).mean())
+    return top_air, bottom_air
+
+
 def build_mcx_volume(
     volume_path: str,
     label_path: Optional[str],
     output_dir: str,
     media_table: Optional[Dict[str, Any]] = None,
     nphoton: int = 10000000,
+    enforce_air_top: bool = False,
+    auto_flip_z_to_air_top: bool = False,
+    air_label_id: int = 0,
 ) -> Dict[str, Any]:
     """Core build function.
 
@@ -292,6 +310,26 @@ def build_mcx_volume(
     if labels.max() > 255:
         raise SystemExit(
             f"Label IDs must be <= 255 for MediaFormat='byte', got max label {int(labels.max())}."
+        )
+
+    # --- Optional orientation guardrail: air should be at top ---
+    top_air_frac, bottom_air_frac = _air_fraction_top_bottom(labels, int(air_label_id))
+    flipped_for_air_top = False
+    if auto_flip_z_to_air_top and bottom_air_frac > top_air_frac:
+        labels = np.flip(labels, axis=0)
+        flipped_for_air_top = True
+        top_air_frac, bottom_air_frac = _air_fraction_top_bottom(labels, int(air_label_id))
+        print(
+            "  [INFO] Flipped Z axis to place air/background toward top "
+            f"(air_label_id={air_label_id})."
+        )
+
+    if enforce_air_top and bottom_air_frac > top_air_frac:
+        raise SystemExit(
+            "Air-side orientation check failed: bottom has more air/background "
+            f"than top (top={top_air_frac:.4f}, bottom={bottom_air_frac:.4f}, "
+            f"air_label_id={air_label_id}). Use --auto-flip-z-to-air-top or "
+            "provide a correctly oriented volume."
         )
 
     # --- Write mcx_volume.npy (for Python/analysis use) ---
@@ -366,6 +404,7 @@ def build_mcx_volume(
         },
         "Notes": (
             "MCX v2025.10-compatible config auto-generated. "
+            "Source is top-down by default: Pos=[cx,cy,0], Dir=[0,0,+1]. "
             "Adjust Photons, source Pos/Dir, or Forward time gates as needed."
         ),
     }
@@ -380,6 +419,14 @@ def build_mcx_volume(
         "volume_shape": dim_np,
         "volume_dtype": str(volume.dtype),
         "labels_unique": [int(v) for v in np.unique(labels).tolist()],
+        "orientation": {
+            "air_label_id": int(air_label_id),
+            "top_air_fraction": float(top_air_frac),
+            "bottom_air_fraction": float(bottom_air_frac),
+            "flipped_for_air_top": bool(flipped_for_air_top),
+            "source_position": source_pos,
+            "source_direction": [0.0, 0.0, 1.0, 0.0],
+        },
         "output_dir": str(out.resolve()),
         "mcx_schema": "v2025.10",
         "artifacts": {
@@ -431,6 +478,22 @@ def _build_cli() -> argparse.ArgumentParser:
         default=10000000,
         help="Number of photons for MCX simulation (default: 10000000). Must be > 0.",
     )
+    ap.add_argument(
+        "--enforce-air-top",
+        action="store_true",
+        help="Fail if bottom slice has more air/background voxels than top slice.",
+    )
+    ap.add_argument(
+        "--auto-flip-z-to-air-top",
+        action="store_true",
+        help="If bottom has more air/background than top, flip Z before writing outputs.",
+    )
+    ap.add_argument(
+        "--air-label-id",
+        type=int,
+        default=0,
+        help="Label ID used as air/background for orientation checks (default: 0).",
+    )
     return ap
 
 
@@ -447,6 +510,9 @@ def main() -> None:
         label_path=args.label_map,
         output_dir=args.output_dir,
         nphoton=args.nphoton,
+        enforce_air_top=bool(args.enforce_air_top),
+        auto_flip_z_to_air_top=bool(args.auto_flip_z_to_air_top),
+        air_label_id=int(args.air_label_id),
     )
 
     print("\n=== MCX Build Complete ===")

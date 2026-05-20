@@ -66,6 +66,33 @@ python scripts/simulation/generate_mvp_smoke_volume.py --output data/artifacts/m
 python scripts/simulation/run_mvp_multiphysics_from_config.py --config configs/mvp_multiphysics_example.yaml --label-volume data/artifacts/mvp/smoke_label_volume.npy --output-dir data/artifacts/mvp/smoke_run
 ```
 
+### 7) 3D MCX + GA dataset workflow from `tiles_for_simulation`
+
+```bash
+# A) Materialize 3D volumes from 2D class tiles
+python scripts/simulation/materialize_3d_mcx_volumes_from_tiles.py \
+  --tiles-root data/artifacts/tiles_for_simulation \
+  --output-dir data/artifacts/3d/mcx_from_tiles \
+  --depth 16 --max-volumes 50
+
+# B) Run GA-in-loop + MCX over generated volumes
+python scripts/simulation/run_3d_mcx_ga_dataset.py \
+  --volumes-manifest data/artifacts/3d/mcx_from_tiles/manifest.json \
+  --output-dir data/artifacts/3d/mcx_ga_dataset_run \
+  --num-volumes 20 \
+  --target-L 60 --target-a 10 --target-b 15 \
+  --ga-generations 5 --ga-population-size 12 \
+  --ga-forward-mode surrogate \
+  --mcx-run --mcx-binary mcx \
+  --render-absorption-video --render-reflectance-spectrum
+```
+
+Notes:
+- `--max-volumes 0` (materializer) and `--num-volumes 0` (dataset runner) mean full dataset.
+- GA is class-aware per volume: only present labels contribute priors for parameter bounds.
+- MCX build defaults to top-down source from air side (`z=0`, `dir=+z`) and supports `--enforce-air-top` / `--auto-flip-z-to-air-top`.
+- Use `python scripts/simulation/view_volume_3d_interactive.py --volume <volume.npy>` to inspect prepared volumes.
+
 ---
 
 ## External Dependencies for Simulations
@@ -117,6 +144,9 @@ pip install PyXOpto
 | `mcx_build_volume.py` | Build MCX volume from label array |
 | `mcx_batch_runner.py` | Batch MCX execution |
 | `mcx_extract_fluence.py` | Extract fluence from MCX output |
+| `materialize_3d_mcx_volumes_from_tiles.py` | Extrude class-ID tiles into 3D MCX label volumes |
+| `run_3d_mcx_ga_dataset.py` | Dataset-scale GA-in-loop + MCX runs |
+| `view_volume_3d_interactive.py` | Interactive 3-view slice viewer for 3D volumes |
 | `thermal_build_model.py` | Pennes bioheat model builder |
 | `thermal_solve.py` | Bioheat equation solver |
 | `thermal_visualise.py` | Thermal simulation visualization |

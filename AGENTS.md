@@ -163,6 +163,47 @@ pip install PyXOpto
 
 Smoke tests use `forward-mode surrogate` and do **not** require MCX or PyXOpto.
 
+### MCX vs PyXOpto in this repo (important for agents)
+
+- **PyXOpto (`xopto`) path is layered MCML**: the realistic PyXOpto branch in `scripts/optical_ga/forward_model.py` uses `skin.Skin3()` (epidermis/dermis/subcutis layered model), not arbitrary voxel geometry.
+- **MCX path in GA batch compare is currently a voxelized layered phantom**: `scripts/optical_ga/mc_wrapper.py` (`run_mcx_simulation`) builds a small 3-layer slab volume (`40x40x60`) from genome thickness parameters, then runs MCX.
+- **So batch compare is backend comparison, not geometry comparison**: `scripts/optical_ga/run_optical_ga_batch_compare.py` compares MC engines under the same layered tissue assumption.
+- **Complex geometry support lives in simulation pipeline**: for arbitrary 3D label volumes, use `scripts/simulation/mcx_build_volume.py` + `scripts/simulation/mcx_batch_runner.py` (not the GA slab builder).
+
+### How 2D tiles/slices become 3D for MCX
+
+There are two documented paths (different goals):
+
+1. **Label-mask extrusion for GA bridge**
+   - Script: `scripts/optical_ga/build_histoseg_label_volume.py`
+   - Input: 2D Histo-Seg RGB semantic mask
+   - Operation: map colors to class IDs, then `--depth N` repeats the 2D map along Z
+   - Output: class-ID volume `.npy` with shape `(D,H,W)`
+
+2. **General MCX volume build for simulation runs**
+   - Script: `scripts/simulation/mcx_build_volume.py`
+   - Input: 3D `.npy` or NIfTI volume (+ optional label map)
+   - Operation: writes MCX raw volume + media table + `mcx_config.json` (Dim `[X,Y,Z]`, OriginType `0`)
+   - Output: `mcx_volume.raw`, `mcx_media_table.json`, `mcx_config.json`, manifest
+
+If starting from many 2D slices, first stack them into a 3D volume (for example with `scripts/3d/stack_slices_to_nifti.py`), then feed that volume to `scripts/simulation/mcx_build_volume.py`.
+
+### 3D MCX + GA dataset workflow (tiles_for_simulation)
+
+- **Input tiles are `tiles_for_simulation/label_id/*.npy`**: use `scripts/simulation/materialize_3d_mcx_volumes_from_tiles.py` to extrude each 2D class-ID tile into a `(D,H,W)` volume.
+- **Run all vs subset**:
+  - `--max-volumes 0` (materializer) means full dataset
+  - `--max-volumes N` or dataset runner `--num-volumes N` limits generated/runned volumes
+  - dataset runner `--run-all` processes all discovered volumes
+- **GA in the loop (per volume, class-aware priors)**: `scripts/simulation/run_3d_mcx_ga_dataset.py` calls:
+  1) `label_to_optical_priors.py` (priors only for classes present in the volume)
+  2) `run_optical_ga_from_labels.py` (target Lab optimization with those priors)
+  3) `mcx_build_volume.py` + `mcx_batch_runner.py`
+- **Air-side illumination guardrail**: `mcx_build_volume.py` defaults to top-down source (`Pos=[cx,cy,0]`, `Dir=[0,0,+1]`), and now supports `--enforce-air-top` and `--auto-flip-z-to-air-top`.
+- **Optional MCX visual outputs** (`mcx_batch_runner.py`):
+  - `--render-absorption-video` (depth-sweep MP4 from `.mc2`)
+  - `--render-reflectance-spectrum` (estimated reflectance curve from absorption logs across wavelength-tagged jobs)
+
 ### SDXL base model + classifier (NOT needed for simulations)
 
 The SDXL base model, Kohya scripts, and classifier checkpoint are only used for LoRA inpainting on Akio's PC. The simulation scripts do not reference them.
@@ -229,7 +270,7 @@ dvc repro run_3d_volume_inpaint_tile_smoke
 | `optical_fitness.py` | Fitness functions for GA optimization |
 | `optical_report.py` | GA run reporting |
 | `run_optical_ga_from_labels.py` | Full GA pipeline from Histo-Seg label tiles |
-| `run_optical_ga_batch_compare.py` | Multi-seed batch compare (MCX vs surrogate) |
+| `run_optical_ga_batch_compare.py` | Multi-seed batch compare (MCX vs PyXOpto in realistic mode; parity check in surrogate mode) |
 | `render_best_run_video.py` | Render GA evolution video |
 | `qc_tiles_for_simulation.py` | QC plots for simulation tile dataset |
 | `label_to_optical_priors.py` | Per-class optical property priors |
@@ -247,6 +288,9 @@ dvc repro run_3d_volume_inpaint_tile_smoke
 | `run_mvp_multiphysics_from_config.py` | Config-driven multi-physics pipeline runner |
 | `run_mvp_multiphysics_pipeline.py` | Pipeline orchestration |
 | `colorimetry_metrics.py` | Colorimetry metrics for tissue appearance |
+| `materialize_3d_mcx_volumes_from_tiles.py` | Extrude `tiles_for_simulation` label tiles into 3D MCX-ready volumes |
+| `run_3d_mcx_ga_dataset.py` | Dataset-scale GA-in-loop + MCX orchestration across many volumes |
+| `view_volume_3d_interactive.py` | Interactive 3-view slice viewer for prepared 3D volumes |
 
 ---
 
@@ -294,6 +338,10 @@ python scripts/optical_ga/qc_tiles_for_simulation.py --help
 python scripts/optical_ga/render_best_run_video.py --help
 python scripts/simulation/run_mvp_multiphysics_from_config.py --help
 python scripts/simulation/mcx_build_volume.py --help
+python scripts/simulation/mcx_batch_runner.py --help
+python scripts/simulation/materialize_3d_mcx_volumes_from_tiles.py --help
+python scripts/simulation/run_3d_mcx_ga_dataset.py --help
+python scripts/simulation/view_volume_3d_interactive.py --help
 python scripts/simulation/thermal_build_model.py --help
 python scripts/simulation/thermal_solve.py --help
 python scripts/3d/propagate_mask_across_slices.py --help

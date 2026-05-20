@@ -288,6 +288,8 @@ def run_mcx_batch(
     output_dir: Path,
     mcx_run: bool,
     mcx_binary: str = "mcx",
+    render_absorption_video: bool = False,
+    render_reflectance_spectrum: bool = False,
     timeout: int = 600,
 ) -> Dict[str, Any]:
     """Run MCX batch runner (dry-run by default, real if --mcx-run)."""
@@ -311,6 +313,11 @@ def run_mcx_batch(
     if not mcx_run:
         cmd.append("--dry-run")
         print("  [mcx_batch] Dry-run mode (pass --mcx-run to execute)")
+
+    if render_absorption_video:
+        cmd.append("--render-absorption-video")
+    if render_reflectance_spectrum:
+        cmd.append("--render-reflectance-spectrum")
 
     return _run_cmd(cmd, step_id="mcx_batch", timeout=timeout)
 
@@ -667,6 +674,16 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Number of photons for MCX simulation. If not provided, "
         "the default in mcx_build_volume.py (10,000,000) is used.",
     )
+    ap.add_argument(
+        "--mcx-render-absorption-video",
+        action="store_true",
+        help="Render per-job absorption depth-sweep video from MCX .mc2 outputs.",
+    )
+    ap.add_argument(
+        "--mcx-render-reflectance-spectrum",
+        action="store_true",
+        help="Render reflectance spectrum plot from MCX batch absorption logs.",
+    )
     # Thermal solver parameters
     ap.add_argument(
         "--thermal-dt",
@@ -908,6 +925,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 output_dir=output_dir,
                 mcx_run=args.mcx_run,
                 mcx_binary=args.mcx_binary,
+                render_absorption_video=args.mcx_render_absorption_video,
+                render_reflectance_spectrum=args.mcx_render_reflectance_spectrum,
                 timeout=args.timeout,
             )
             if steps["mcx_batch"]["status"] not in ("completed", "skipped"):

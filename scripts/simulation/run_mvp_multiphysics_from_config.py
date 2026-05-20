@@ -233,6 +233,11 @@ def build_pipeline_command(
         if mcx_mode == "run":
             cmd.append("--mcx-run")
 
+        if bool(mcx.get("render_absorption_video", False)):
+            cmd.append("--mcx-render-absorption-video")
+        if bool(mcx.get("render_reflectance_spectrum", False)):
+            cmd.append("--mcx-render-reflectance-spectrum")
+
     # --- Thermal options ---
     thermal = config.get("thermal", {})
     if not thermal.get("enabled", True):
