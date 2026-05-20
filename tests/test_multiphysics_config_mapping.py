@@ -3,7 +3,7 @@
 Covers:
   - build_pipeline_command() mapping behavior
   - CLI override handling (label_volume, output_dir, fail_fast)
-  - GA / MCX / Thermal option mapping
+  - Optical GA / MCX / Thermal option mapping
   - Error edge cases in config validation
 
 These tests import the module directly; PyYAML must be installed.
@@ -78,36 +78,64 @@ class TestRequiredPaths:
 
 
 # ---------------------------------------------------------------------------
-# build_pipeline_command — GA options
+# build_pipeline_command — Optical GA options
 # ---------------------------------------------------------------------------
 
-class TestGAOptions:
-    def test_disabled_adds_skip_ga(self):
+class TestOpticalGAOptions:
+    def test_disabled_adds_skip_optical_ga(self):
         config = _minimal_config()
-        config["ga"] = {"enabled": False}
+        config["optical_ga"] = {"enabled": False}
         cmd = build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
-        assert "--skip-ga" in cmd
+        assert "--skip-optical-ga" in cmd
 
-    def test_mock_adds_ga_mock(self):
+    def test_forward_mode_surrogate(self):
         config = _minimal_config()
-        config["ga"] = {"enabled": True, "mock": True}
+        config["optical_ga"] = {"enabled": True, "forward_mode": "surrogate"}
         cmd = build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
-        assert "--ga-mock" in cmd
+        idx = cmd.index("--optical-ga-forward-mode")
+        assert cmd[idx + 1] == "surrogate"
 
-    def test_fitness_json_adds_flag(self):
+    def test_forward_mode_realistic(self):
         config = _minimal_config()
-        config["ga"] = {
-            "enabled": True, "mock": False,
-            "fitness_json": "/abs/path/fitness.json",
+        config["optical_ga"] = {"enabled": True, "forward_mode": "realistic"}
+        cmd = build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
+        idx = cmd.index("--optical-ga-forward-mode")
+        assert cmd[idx + 1] == "realistic"
+
+    def test_fitness_mode_lab(self):
+        config = _minimal_config()
+        config["optical_ga"] = {"enabled": True, "fitness_mode": "lab"}
+        cmd = build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
+        idx = cmd.index("--optical-ga-fitness-mode")
+        assert cmd[idx + 1] == "lab"
+
+    def test_fitness_mode_ita(self):
+        config = _minimal_config()
+        config["optical_ga"] = {"enabled": True, "fitness_mode": "ita"}
+        cmd = build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
+        idx = cmd.index("--optical-ga-fitness-mode")
+        assert cmd[idx + 1] == "ita"
+
+    def test_target_colour_mapped(self):
+        config = _minimal_config()
+        config["optical_ga"] = {
+            "enabled": True,
+            "target_L": 65.0,
+            "target_a": 12.0,
+            "target_b": 18.0,
         }
         cmd = build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
-        idx = cmd.index("--ga-fitness-json")
-        assert cmd[idx + 1] == "/abs/path/fitness.json"
+        cmd_str = " ".join(cmd)
+        assert "--optical-ga-target-L 65.0" in cmd_str
+        assert "--optical-ga-target-a 12.0" in cmd_str
+        assert "--optical-ga-target-b 18.0" in cmd_str
 
     def test_ga_loop_params_mapped(self):
         config = _minimal_config()
-        config["ga"] = {
-            "enabled": True, "mock": True,
+        config["optical_ga"] = {
+            "enabled": True,
+            "forward_mode": "surrogate",
+            "fitness_mode": "lab",
             "generations": 10,
             "population_size": 20,
             "mutation_rate": 0.3,
@@ -118,31 +146,37 @@ class TestGAOptions:
         }
         cmd = build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
         cmd_str = " ".join(cmd)
-        assert "--ga-generations 10" in cmd_str
-        assert "--ga-population-size 20" in cmd_str
-        assert "--ga-mutation-rate 0.3" in cmd_str
-        assert "--ga-mutation-strength 0.05" in cmd_str
-        assert "--ga-elite-fraction 0.15" in cmd_str
-        assert "--ga-tournament-size 4" in cmd_str
-        assert "--ga-seed 123" in cmd_str
+        assert "--optical-ga-generations 10" in cmd_str
+        assert "--optical-ga-population-size 20" in cmd_str
+        assert "--optical-ga-mutation-rate 0.3" in cmd_str
+        assert "--optical-ga-mutation-strength 0.05" in cmd_str
+        assert "--optical-ga-elite-fraction 0.15" in cmd_str
+        assert "--optical-ga-tournament-size 4" in cmd_str
+        assert "--optical-ga-seed 123" in cmd_str
+
+    def test_dermal_chromophores_flag(self):
+        config = _minimal_config()
+        config["optical_ga"] = {
+            "enabled": True,
+            "use_dermal_chromophores": True,
+        }
+        cmd = build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
+        assert "--optical-ga-use-dermal-chromophores" in cmd
+
+    def test_dermal_chromophores_default_off(self):
+        config = _minimal_config()
+        config["optical_ga"] = {"enabled": True}
+        cmd = build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
+        assert "--optical-ga-use-dermal-chromophores" not in cmd
 
     def test_ga_params_absent_by_default(self):
-        """When no GA section is present, defaults to enabled+no extra flags."""
+        """When no optical_ga section is present, minimal defaults."""
         config = _minimal_config()
         cmd = build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
-        # Should NOT have any --ga-* flags since default mock=True doesn't add flag
-        # Actually, it adds --ga-mock. Let me check...
-        # In build_pipeline_command: ga = config.get("ga", {})
-        # if not ga.get("enabled", True): skip
-        # else: ga_mock = ga.get("mock", True); if ga_mock: cmd.append("--ga-mock")
-        # So default (no ga in config) means ga.get("mock", True) = True, adds --ga-mock
-        # But no generation/population flags because those are absent from config
-        assert "--ga-mock" in cmd
-        assert not any(f in " ".join(cmd) for f in [
-            "--ga-generations", "--ga-population-size", "--ga-mutation-rate",
-            "--ga-mutation-strength", "--ga-elite-fraction", "--ga-tournament-size",
-            "--ga-seed",
-        ])
+        # Should NOT have any --skip-optical-ga flag (default enabled)
+        assert "--skip-optical-ga" not in cmd
+        # Should use default forward_mode surrogate
+        assert "--optical-ga-forward-mode surrogate" in " ".join(cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +370,7 @@ class TestLoadConfig:
 
     def test_missing_required_keys_exits(self, tmp_path: Path):
         cfg = tmp_path / "bad.yaml"
-        cfg.write_text("ga:\n  enabled: true\n", encoding="utf-8")
+        cfg.write_text("optical_ga:\n  enabled: true\n", encoding="utf-8")
         with pytest.raises(SystemExit):
             load_config(str(cfg))
 
@@ -382,8 +416,23 @@ class TestConfigErrorHandling:
         with pytest.raises(SystemExit):
             build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
 
-    def test_ga_mock_false_without_fitness_json_exits(self):
+    def test_optical_ga_invalid_forward_mode_exits(self):
         config = _minimal_config()
-        config["ga"] = {"enabled": True, "mock": False}  # no fitness_json
+        config["optical_ga"] = {"enabled": True, "forward_mode": "invalid"}
+        with pytest.raises(SystemExit):
+            build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
+
+    def test_optical_ga_invalid_fitness_mode_exits(self):
+        config = _minimal_config()
+        config["optical_ga"] = {"enabled": True, "fitness_mode": "invalid"}
+        with pytest.raises(SystemExit):
+            build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))
+
+    def test_optical_ga_param_validation(self):
+        config = _minimal_config()
+        config["optical_ga"] = {
+            "enabled": True,
+            "generations": 0,  # invalid: must be >= 1
+        }
         with pytest.raises(SystemExit):
             build_pipeline_command(config, {}, _REPO_ROOT, Path("/tmp"))

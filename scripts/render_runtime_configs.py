@@ -4,7 +4,6 @@ Render runtime phase configs from templates + params.yaml.
 
 Single source of truth for shared model paths:
   params.models.sdxl_base_model
-  params.models.classifier_checkpoint
   params.models.kohya_scripts_dir
 """
 
@@ -52,16 +51,12 @@ def main() -> None:
     params = _load_yaml(Path(args.params))
     models = params.get("models", {}) or {}
     dataset = params.get("dataset", {}) or {}
-    gradcam = params.get("gradcam", {}) or {}
     patch_workflow = params.get("patch_workflow", {}) or {}
 
     sdxl_base_model = _required_path("models.sdxl_base_model", models.get("sdxl_base_model"))
-    classifier_ckpt = _required_path("models.classifier_checkpoint", models.get("classifier_checkpoint"))
     kohya_dir = _required_path("models.kohya_scripts_dir", models.get("kohya_scripts_dir"))
     labels_csv = _required_path("dataset.pairs_csv", dataset.get("pairs_csv"))
     mask_dir = str(patch_workflow.get("training_mask_dir") or "").strip()
-    if not mask_dir:
-        mask_dir = _required_path("gradcam.output_dir", gradcam.get("output_dir"))
 
     phase1 = _load_yaml(Path(args.phase1_template))
     phase2 = _load_yaml(Path(args.phase2_template))
@@ -75,7 +70,6 @@ def main() -> None:
     phase2.setdefault("selector", {})
     phase2["base_train_config"] = args.phase1_out
     phase2["selector"]["base_model"] = sdxl_base_model
-    phase2["selector"]["classifier_ckpt"] = classifier_ckpt
     phase2["selector"]["labels_csv"] = labels_csv
     phase2["selector"]["mask_dir"] = mask_dir
     phase2.setdefault("train_overrides", {})
@@ -86,7 +80,6 @@ def main() -> None:
     phase3.setdefault("selector", {})
     phase3["base_train_config"] = args.phase1_out
     phase3["selector"]["base_model"] = sdxl_base_model
-    phase3["selector"]["classifier_ckpt"] = classifier_ckpt
     phase3["selector"]["labels_csv"] = labels_csv
     phase3["selector"]["mask_dir"] = mask_dir
     phase3.setdefault("train_overrides", {})
@@ -104,11 +97,9 @@ def main() -> None:
         "phase3_out": args.phase3_out,
         "resolved_paths": {
             "sdxl_base_model": sdxl_base_model,
-            "classifier_checkpoint": classifier_ckpt,
             "kohya_scripts_dir": kohya_dir,
             "labels_csv": labels_csv,
             "mask_dir": mask_dir,
-            "gradcam_model_config": gradcam.get("model_config"),
         },
     }
     summary_path = Path(args.summary_out)

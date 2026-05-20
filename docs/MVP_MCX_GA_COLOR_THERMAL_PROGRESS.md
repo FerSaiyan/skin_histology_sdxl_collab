@@ -289,35 +289,294 @@ python scripts/simulation/mcx_extract_fluence.py \
 
 ---
 
-### Genetic Algorithm (GA) — Mask & Parameter Optimisation
+### Optical GA — Skin Biophysical Parameter Estimation
 
-**Goal:** Use GA to search the inpainting parameter space (mask shape, location,
-strength, prompt tokens, seed) for optimised outputs against a reward function.
+**Goal:** Use GA to search for skin biophysical optical parameters (melanin,
+blood volume, oxygen saturation, scattering amplitudes, layer thicknesses, etc.)
+that best match a target colour (L\\*a\\*b\\* or ITA).
+
+This replaces the old inpainting hyperparameter GA with a friend's
+optical-parameter methodology (see ``external_refs/friend_optical_ga/``).
+
+#### Histo-Seg → Optical GA Bridge
+
+Two bridge scripts prepare Histo-Seg segmentation masks for the optical GA pipeline:
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/optical_ga/build_histoseg_label_volume.py` | Convert an RGB Histo-Seg mask to a class-ID label map (.npy), with optional 3D extrusion (`--depth`). Unknown colors map to class 0 (background); `--strict` fails on unknowns. |
+| `scripts/optical_ga/label_to_optical_priors.py` | Convert a class-ID label map into per-class optical priors (min/max ranges for melanin, blood, water, scattering, etc.) as a JSON file, with optional per-voxel prior index map (.npz). |
+| `configs/optical_ga_histoseg_priors.json` | Default priors config for Histo-Seg classes 0..11, consumed by `label_to_optical_priors.py`. |
+
+**Example bridge command sequence (using a real Histo-Seg mask):**
+
+```bash
+# Step 1: convert RGB mask → class-ID label volume (2D, depth=1)
+python scripts/optical_ga/build_histoseg_label_volume.py \
+    --mask data/raw/histo_seg_v2/masks/example_mask.png \
+    --output-label-npy /tmp/labels.npy \
+    --output-meta-json /tmp/label_meta.json \
+    --depth 1
+
+# Step 2: convert label volume → optical priors JSON
+python scripts/optical_ga/label_to_optical_priors.py \
+    --label-npy /tmp/labels.npy \
+    --priors-config configs/optical_ga_histoseg_priors.json \
+    --output-priors-json /tmp/optical_priors.json \
+    --output-voxel-prior-npz /tmp/voxel_prior_idx.npz
+
+# Step 3: pass priors to the optical GA (example with surrogate mode)
+python scripts/optical_ga/ga_optimiser_optical.py \
+    --target-L 55 --target-a 10 --target-b 15 \
+    --generations 10 --population-size 20 \
+    --forward-mode surrogate --fitness-mode lab
+```
+
+The bridge scripts are deterministic and produce artifact-friendly outputs
+(.npy, .json, .npz) suitable for downstream MCX volume building or thermal
+simulation.
+
+**Step 3 - Optical GA adapter (single-command end-to-end):**
+
+The ``run_optical_ga_from_labels.py`` adapter combines the label volume and
+priors JSON into a complete GA run.  It:
+
+1. Identifies which tissue classes are present in the label volume and their
+   voxel counts.
+2. Derives aggregated bounded search ranges from the present classes' priors
+   (excluding background class 0).
+3. Seeds the GA initial population within the derived bounds.
+4. Runs a configurable GA loop (surrogate forward model by default).
+5. Writes ``adapter_manifest.json`` documenting the inputs, present classes,
+   derived bounds summary, and GA configuration alongside the standard GA
+   outputs (``best_genome.json``, ``ga_history.csv``,
+   ``population_final.json``).
+
+**Bounds derivation strategy (documented in every manifest):**
+For each of the 19 core genome parameters, given N present non-background
+tissue classes, each with a [min_i, max_i] prior range:
+
+::
+
+    derived_min[p] = min(min_1[p], min_2[p], ..., min_N[p])
+    derived_max[p] = max(max_1[p], max_2[p], ..., max_N[p])
+
+Background class (ID 0) is excluded because it represents empty/glass rather
+than real tissue.  If no non-background classes are present, the global genome
+bounds from ``genome_encoding_optical.py`` are used as a fallback.
+
+**End-to-end command sequence (using a synthetic label volume):**
+
+```bash
+# Step 1: create a synthetic label volume (2D with epidermis + dermis)
+python -c "
+import numpy as np
+vol = np.zeros((8, 8), dtype=np.uint8)
+vol[2:6, 2:4] = 1   # epidermis
+vol[2:6, 4:7] = 2   # reticular dermis
+np.save('/tmp/labels.npy', vol)
+"
+
+# Step 2: generate priors JSON (uses built-in defaults for classes 0,1,2)
+python scripts/optical_ga/label_to_optical_priors.py \
+    --label-npy /tmp/labels.npy \
+    --output-priors-json /tmp/optical_priors.json
+
+# Step 3: run the optical GA adapter (surrogate mode, smoke defaults)
+python scripts/optical_ga/run_optical_ga_from_labels.py \
+    --label-npy /tmp/labels.npy \
+    --priors-json /tmp/optical_priors.json \
+    --output-dir /tmp/optical_ga_adapter_run \
+    --target-L 55 --target-a 8 --target-b 12 \
+    --generations 3 --population-size 8 --seed 42 \
+    --forward-mode surrogate --fitness-mode lab
+
+# Verify outputs
+ls -la /tmp/optical_ga_adapter_run/
+python -c "
+import json
+m = json.load(open('/tmp/optical_ga_adapter_run/adapter_manifest.json'))
+print('Present classes:', list(m['present_classes'].keys()))
+print('Derived bounds: 19 parameters documented')
+print('Best genome path:', m['ga_outputs']['best_genome'])
+"
+```
+
 
 **How it fits:**
 
 | GA Component | Implementation |
 |--------------|----------------|
-| Genome | Encodes: mask center (x,y), mask radius, mask shape type, denoising strength, guidance scale, random seed |
-| Population | Set of parameter combinations, each producing one inpainting run |
-| Fitness function | Combined score from Z-coherence metrics + inpainting fidelity (mask-edge blending quality) |
+| Genome | Encodes 19 core biophysical parameters (optionally 23 including bilirubin, biliverdin, COHb, metHb) from the friend's reference script |
+| Forward model | Two modes: **surrogate** (lightweight analytical, no deps) and **realistic** (requires xopto MCML or MCX binary) |
+| Fitness function | L\\*a\\*b\\* target matching with normalised denominators (L/60, a/20, b/25) plus optional ITA-mode |
 | Selection + crossover | Standard GA operators (tournament selection, uniform crossover) |
-| Mutation | Perturb mask parameters ±10%, randomise seed |
+| Mutation | Gaussian perturbation of normalised genome parameters |
+| Wavelength handling | 380–780 nm, 5 nm step (81 wavelengths) |
 
-**GA scripts (implemented skeleton + extensible fitness wiring):**
+**Optical GA scripts (core):**
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/ga/genome_encoding.py` | Encode/decode inpainting parameters as a fixed-length genome |
-| `scripts/ga/run_inpaint_fitness.py` | Run one inpainting + scoring cycle for a genome |
-| `scripts/ga/ga_optimiser.py` | Main GA loop: population init → fitness → selection → crossover → mutation → repeat (supports `--mock` and `--fitness-json`) |
-| `scripts/ga/ga_report.py` | Analyse convergence, pareto front, best genomes |
+| `scripts/optical_ga/genome_encoding_optical.py` | Skin biophysical parameter definitions, bounds, encode/decode helpers |
+| `scripts/optical_ga/forward_model.py` | Surrogate (analytical) and realistic (MC backend) forward models |
+| `scripts/optical_ga/colorimetry.py` | L\\*a\\*b\\*, ITA angle, and colour-space utilities |
+| `scripts/optical_ga/optical_fitness.py` | Fitness functions: lab, ita, ita_no_a modes |
+| `scripts/optical_ga/ga_optimiser_optical.py` | Main GA loop CLI (supports `--forward-mode` and `--fitness-mode`) |
+| `scripts/optical_ga/optical_report.py` | Convergence analysis and summary reports |
+| `scripts/optical_ga/mc_wrapper.py` | MC backend wrapper (xopto/MCX) interface |
 
-**Acceptance criteria for GA integration:**
+**New workstreams: epidermis-air interface, batch compare, video rendering**
 
-- A configurable genome produces reproducible inpainting runs.
-- GA converges to lower mask-edge RMSE over ≤50 generations.
-- Pareto front shows trade-off between inpainting fidelity and Z-coherence.
+| Script | Purpose |
+|--------|---------|
+| `scripts/optical_ga/estimate_epidermis_normal.py` | Estimate epidermis-air interface normal from a segmentation mask via PCA. Returns normal angle, unit vector, and linearity confidence. |
+| `scripts/optical_ga/select_orient_tile_for_incidence.py` | Extract a rotated tile from the original high-res image, aligned so the epidermis-air normal points toward the top edge. Affine warp from source coordinates — no padded canvas. |
+| `scripts/optical_ga/run_optical_ga_batch_compare.py` | Batch-compare MCX vs PyXOpto GA across N seeds with identical hyper-parameters and target colour. Supports surrogate (lightweight) and realistic (physical MC) modes. |
+| `scripts/optical_ga/render_best_run_video.py` | Render an MP4 convergence video (swatches, ΔE, fitness curves, optional spectra) from a GA run's ``ga_history.csv`` and ``best_genome.json``. |
+| `configs/optical_ga_shared_bounds.json` | Shared parameter bounds enforced for both branches in batch compare. |
+| `tests/test_optical_ga_tile_orientation.py` | Geometry invariants for normal estimation and oriented-tile extraction. |
+
+**Epidermis interface tile orientation workflow**
+
+The oriented-tile pipeline enables consistent incidence-angle preparation for
+optical property studies.  It ensures the epidermis-air interface is aligned to
+the top edge of every extracted tile, removing rotational variance:
+
+```
+Source histology slice + segmentation mask
+  │
+  ├── 1. Estimate epidermis-air interface normal via PCA
+  │      scripts/optical_ga/estimate_epidermis_normal.py
+  │      → normal_deg, confidence, boundary_pts
+  │
+  └── 2. Extract rotated 512×512 tile, normal pointing up
+         scripts/optical_ga/select_orient_tile_for_incidence.py
+         → orient_tile.png + orient_tile_mask.png + metadata JSON
+```
+
+**Key properties:**
+- Rotation is computed to align the outward normal (air→epidermis) with the
+  ``−y`` direction (top edge) of the output tile.
+- The affine warp samples directly from the original high-res image — **no
+  pre-padded canvas** introduces synthetic pixels.
+- Both scipy.ndimage (primary) and cv2 (fallback) backends are supported.
+
+**Usage:**
+
+```bash
+# Full pipeline (estimate normal + extract tile)
+python scripts/optical_ga/select_orient_tile_for_incidence.py \
+    --image slice.png --mask mask.png --output-dir /tmp/tiles
+
+# With pre-computed normal (e.g., from a previous run)
+python scripts/optical_ga/estimate_epidermis_normal.py \
+    --mask mask.png --output /tmp/normal.json
+python scripts/optical_ga/select_orient_tile_for_incidence.py \
+    --image slice.png --mask mask.png \
+    --normal-json /tmp/normal.json --output-dir /tmp/tiles
+```
+
+**DVC smoke test:**
+
+```bash
+dvc repro extract_orient_tile_smoke
+```
+
+---
+
+**Batch compare (Branch-A/B convergence comparison)**
+
+The batch compare script runs the same GA configuration (shared bounds, target
+colour, hyper-parameters) across multiple seeds for both MCX and PyXOpto
+branches, enabling head-to-head convergence comparison.
+
+**Strict physical-mode behaviour (default for ``--forward-mode realistic``):**
+
+When ``--forward-mode realistic`` is used, the default behaviour is **strict**:
+if the requested MC backend is not available, the script fails with an
+actionable ``RuntimeError`` rather than silently falling back to surrogate.
+This prevents misleading comparison outputs.
+
+To explicitly allow surrogate fallback:
+
+```bash
+python scripts/optical_ga/run_optical_ga_batch_compare.py \
+    --forward-mode realistic --allow-surrogate-fallback \
+    --num-seeds 5 --generations 20 \
+    --config configs/optical_ga_shared_bounds.json \
+    --output-dir outputs/optical_ga/batch_compare
+```
+
+**Surrogate mode (no external deps, for smoke testing):**
+
+```bash
+python scripts/optical_ga/run_optical_ga_batch_compare.py \
+    --forward-mode surrogate \
+    --num-seeds 2 --generations 3 --population-size 8 \
+    --config configs/optical_ga_shared_bounds.json \
+    --output-dir /tmp/batch_smoke
+```
+
+**Outputs produced per run:**
+- ``batch_manifest.json`` — top-level summary with CLI overrides, timestamps
+- ``per_seed_metrics.json`` — per-seed fitness, Lab, elapsed
+- ``aggregate_stats.json`` — per-branch best/median/mean/IQR + win rates
+- ``summary.csv`` — flat per-seed table
+- ``leaderboard.csv`` — best-per-seed rank across branches
+- Per-seed subdirectories: ``{branch}/seed_{N}/best_genome.json``,
+  ``ga_history.csv``, ``population_final.json``
+
+**DVC smoke stage:**
+
+```bash
+dvc repro run_optical_ga_batch_compare_smoke
+```
+
+---
+
+**Best-run video rendering**
+
+The video renderer reads a GA run directory (``ga_history.csv`` +
+``best_genome.json``) and produces per-frame PNGs plus an MP4 (if ffmpeg is
+available).  Each frame shows:
+
+- Target and current-best colour swatches
+- ΔE colour difference metric
+- Fitness convergence curve (best + mean over generations)
+- Lab trace panel (L\\* / a\\* / b\\* over generations)
+- Optional reflectance spectra subplot
+
+**Usage with an existing GA run:**
+
+```bash
+python scripts/optical_ga/render_best_run_video.py \
+    --run-dir outputs/optical_ga/my_run \
+    --output-dir outputs/optical_ga/my_run/video \
+    --fps 5 --frame-width 1600 --frame-height 900
+```
+
+**Smoke test (self-contained, generates synthetic GA data):**
+
+```bash
+python scripts/optical_ga/render_best_run_video.py \
+    --smoke-test --smoke-generations 10 --smoke-output /tmp/ga_video_smoke
+```
+
+**DVC smoke stage:**
+
+```bash
+dvc repro render_optical_ga_video_smoke
+```
+
+---
+
+**Acceptance criteria for Optical GA integration:**
+
+- GA converges toward a target L\\*a\\*b\\* using surrogate mode without external dependencies.
+- Parameters stay within biophysically plausible bounds.
+- Both lab and ITA fitness modes produce valid optimisation signals.
+- Realistic mode provides clear error message if MC backend is unavailable.
 
 ---
 
@@ -486,11 +745,13 @@ QC metadata confirms no seam artifacts.
 - Extend `qc_patch_replacement.py` to compute CIELAB ΔE* and KS statistics.
 - Integrate into the existing QC CSV output.
 
-### Stage 3 — GA Optimisation
+### Stage 3 — Optical GA Optimisation
 
-- Implement `scripts/ga/` scripts.
-- Run GA on a subset of parameters (mask center + strength as first genome).
-- Verify convergence with geometry-only fitness function.
+- Implement `scripts/optical_ga/` scripts (done — see module listing above).
+- Run optical GA in surrogate mode (lightweight, no external deps) to estimate
+  skin biophysical parameters from a target colour.
+- Verify convergence with lab and ITA fitness modes.
+- For production use, install xopto or MCX and switch to realistic mode.
 
 ### Stage 4 — MCX Export
 
@@ -561,17 +822,21 @@ python scripts/simulation/run_mvp_multiphysics_from_config.py \
 1. The config is loaded and validated (requires `label_volume` and `output_dir`).
 2. CLI overrides (`--label-volume`, `--output-dir`, `--fail-fast`) take precedence
    over config file values.
-3. Resolved config key-value pairs are mapped to CLI flags of the pipeline script:
-   - `ga.enabled` → `--skip-ga` (inverted)
-   - `ga.mock` → `--ga-mock`
-   - `ga.fitness_json` → `--ga-fitness-json`
-   - `ga.generations` → `--ga-generations`
-   - `ga.population_size` → `--ga-population-size`
-   - `ga.mutation_rate` → `--ga-mutation-rate`
-   - `ga.mutation_strength` → `--ga-mutation-strength`
-   - `ga.elite_fraction` → `--ga-elite-fraction`
-   - `ga.tournament_size` → `--ga-tournament-size`
-   - `ga.seed` → `--ga-seed`
+ 3. Resolved config key-value pairs are mapped to CLI flags of the pipeline script:
+   - `optical_ga.enabled` → `--skip-optical-ga` (inverted)
+   - `optical_ga.forward_mode` → `--optical-ga-forward-mode`
+   - `optical_ga.fitness_mode` → `--optical-ga-fitness-mode`
+   - `optical_ga.target_L` → `--optical-ga-target-L`
+   - `optical_ga.target_a` → `--optical-ga-target-a`
+   - `optical_ga.target_b` → `--optical-ga-target-b`
+   - `optical_ga.generations` → `--optical-ga-generations`
+   - `optical_ga.population_size` → `--optical-ga-population-size`
+   - `optical_ga.mutation_rate` → `--optical-ga-mutation-rate`
+   - `optical_ga.mutation_strength` → `--optical-ga-mutation-strength`
+   - `optical_ga.elite_fraction` → `--optical-ga-elite-fraction`
+   - `optical_ga.tournament_size` → `--optical-ga-tournament-size`
+   - `optical_ga.seed` → `--optical-ga-seed`
+   - `optical_ga.use_dermal_chromophores` → `--optical-ga-use-dermal-chromophores`
    - `mcx.enabled` → `--skip-mcx` (inverted)
    - `mcx.mode` → `--mcx-run` (when `"run"`)
    - `mcx.mcx_binary` → `--mcx-binary`
@@ -590,11 +855,11 @@ python scripts/simulation/run_mvp_multiphysics_from_config.py \
 
 ### Stage 6 — Integrated Multi-Physics Orchestrator
 
-- `scripts/simulation/run_mvp_multiphysics_pipeline.py` — single-command orchestrator chaining GA + MCX + Thermal.
-- Creates subdirs: `ga/`, `mcx/`, `thermal/`, `manifests/` under a single output root.
+- `scripts/simulation/run_mvp_multiphysics_pipeline.py` — single-command orchestrator chaining Optical GA + MCX + Thermal.
+- Creates subdirs: `optical_ga/`, `mcx/`, `thermal/`, `manifests/` under a single output root.
 - Writes `mvp_run_manifest.json` with per-step status, command, returncode, and artifact paths.
-- Supports `--fail-fast`, `--skip-ga`, `--skip-mcx`, `--skip-thermal`, `--mcx-run` flags.
-- GA defaults to mock mode (--ga-mock) with 5 generations / 8 population for lightweight smoke use.
+- Supports `--fail-fast`, `--skip-optical-ga`, `--skip-mcx`, `--skip-thermal`, `--mcx-run` flags.
+- Optical GA defaults to surrogate mode (lightweight, no external deps) with 3 generations / 8 population for quick smoke use.
 - MCX defaults to dry-run mode (pass `--mcx-run` to execute with a real MCX binary).
 - Thermal solver uses conservative defaults (dt=0.01s, 50 steps, spherical source).
 
@@ -607,7 +872,7 @@ vol = np.array([[[0,0,0,0],[0,1,1,0],[0,1,2,0],[0,0,0,0]]], dtype=np.int32)
 np.save('/tmp/mvp_smoke_labels.npy', vol)
 "
 
-# Run the full orchestrator (GA mock + MCX dry-run + thermal)
+# Run the full orchestrator (Optical GA surrogate + MCX dry-run + thermal)
 python scripts/simulation/run_mvp_multiphysics_pipeline.py \
     --label-volume /tmp/mvp_smoke_labels.npy \
     --output-dir /tmp/mvp_smoke_run
@@ -627,7 +892,7 @@ for sid, s in m['steps'].items():
 python scripts/simulation/run_mvp_multiphysics_pipeline.py \
     --label-volume /tmp/mvp_smoke_labels.npy \
     --output-dir /tmp/mvp_thermal_only \
-    --skip-ga --skip-mcx
+    --skip-optical-ga --skip-mcx
 ```
 
 
@@ -645,8 +910,8 @@ python scripts/simulation/run_mvp_multiphysics_pipeline.py \
    (requires SDXL base model + trained LoRA).
 4. **Colorimetry metrics** are integrated into the QC output and confirm
    inpainted/non-inpainted colour distribution consistency.
-5. **GA optimisation** converges over a single-parameter search space (e.g.,
-   mask radius × denoising strength).
+5. **Optical GA optimisation** converges toward a target L\\*a\\*b\\* using
+   surrogate mode (no external deps) over 19 biophysical parameters.
 6. **MCX export** produces a runnable simulation input from an inpainted volume.
 7. **Thermal simulation** solves Pennes bioheat equation on the same volume.
 
@@ -686,7 +951,17 @@ python scripts/simulation/run_mvp_multiphysics_pipeline.py \
 | Pipeline orchestrator | `scripts/3d/run_volume_inpaint_pipeline.py` |
 | Analysis: run comparison | `scripts/analysis/plot_run_comparison.py` |
 | Agent instructions | `AGENTS.md` |
+| Histo-Seg → label volume bridge | `scripts/optical_ga/build_histoseg_label_volume.py` |
+| Label → optical priors bridge | `scripts/optical_ga/label_to_optical_priors.py` |
+| Histo-Seg default priors config | `configs/optical_ga_histoseg_priors.json` |
+| Bridge tests | `tests/test_optical_ga_bridge.py` |
+| Interface normal estimation | `scripts/optical_ga/estimate_epidermis_normal.py` |
+| Oriented tile extraction | `scripts/optical_ga/select_orient_tile_for_incidence.py` |
+| Batch compare (MCX vs PyXOpto) | `scripts/optical_ga/run_optical_ga_batch_compare.py` |
+| Best-run video rendering | `scripts/optical_ga/render_best_run_video.py` |
+| Shared batch bounds config | `configs/optical_ga_shared_bounds.json` |
+| Oriented tile geometry tests | `tests/test_optical_ga_tile_orientation.py` |
 
 ---
 
-*Last updated: 2026-05-17*
+*Last updated: 2026-05-18*

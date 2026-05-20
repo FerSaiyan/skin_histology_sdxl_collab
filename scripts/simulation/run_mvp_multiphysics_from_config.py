@@ -137,58 +137,86 @@ def build_pipeline_command(
     cmd = [sys.executable, pipeline_script]
 
     # --- Required paths (support CLI override) ---
-    label_volume = overrides.get("label_volume", config["label_volume"])
-    label_volume = _resolve_path(str(label_volume), config_dir)
+    # CLI override values are relative to CWD (not config_dir); config values
+    # are relative to config_dir.  The downstream pipeline does its own
+    # Path(…).resolve() so we pass the value through as-is for overrides.
+    if "label_volume" in overrides:
+        label_volume = str(overrides["label_volume"])
+    else:
+        label_volume = _resolve_path(str(config["label_volume"]), config_dir)
     cmd.extend(["--label-volume", label_volume])
 
-    output_dir = overrides.get("output_dir", config["output_dir"])
-    output_dir = _resolve_path(str(output_dir), config_dir)
+    if "output_dir" in overrides:
+        output_dir = str(overrides["output_dir"])
+    else:
+        output_dir = _resolve_path(str(config["output_dir"]), config_dir)
     cmd.extend(["--output-dir", output_dir])
 
-    # --- GA options ---
-    ga = config.get("ga", {})
-    if not ga.get("enabled", True):
-        cmd.append("--skip-ga")
+    # --- Optical GA options ---
+    oga = config.get("optical_ga", {})
+    if not oga.get("enabled", True):
+        cmd.append("--skip-optical-ga")
     else:
-        ga_mock = ga.get("mock", True)
-        fitness_json = ga.get("fitness_json")
-        if ga_mock:
-            cmd.append("--ga-mock")
-        elif not fitness_json:
+        # Forward and fitness mode
+        forward_mode = oga.get("forward_mode", "surrogate")
+        if forward_mode not in ("surrogate", "realistic"):
             print(
-                "ERROR: ga.mock=false is not currently supported unless ga.fitness_json is set. "
-                "Use ga.mock=true or provide ga.fitness_json.",
+                f"ERROR: optical_ga.forward_mode must be 'surrogate' or 'realistic', "
+                f"got {forward_mode}",
                 file=sys.stderr,
             )
             sys.exit(1)
-        if fitness_json:
-            fitness_json = _resolve_path(str(fitness_json), config_dir)
-            cmd.extend(["--ga-fitness-json", fitness_json])
+        cmd.extend(["--optical-ga-forward-mode", forward_mode])
 
-        # GA loop parameters (optional, default to pipeline defaults if absent)
-        ga_params: List[tuple] = [
-            ("generations", "--ga-generations", lambda v: v >= 1, ">= 1"),
-            ("population_size", "--ga-population-size", lambda v: v >= 2, ">= 2"),
-            ("mutation_rate", "--ga-mutation-rate",
+        fitness_mode = oga.get("fitness_mode", "lab")
+        if fitness_mode not in ("lab", "ita", "ita_no_a"):
+            print(
+                f"ERROR: optical_ga.fitness_mode must be 'lab', 'ita', or 'ita_no_a', "
+                f"got {fitness_mode}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        cmd.extend(["--optical-ga-fitness-mode", fitness_mode])
+
+        # Target colour
+        target_L = oga.get("target_L")
+        if target_L is not None:
+            cmd.extend(["--optical-ga-target-L", str(target_L)])
+        target_a = oga.get("target_a")
+        if target_a is not None:
+            cmd.extend(["--optical-ga-target-a", str(target_a)])
+        target_b = oga.get("target_b")
+        if target_b is not None:
+            cmd.extend(["--optical-ga-target-b", str(target_b)])
+
+        # GA loop parameters (optional)
+        oga_params: List[tuple] = [
+            ("generations", "--optical-ga-generations", lambda v: v >= 1, ">= 1"),
+            ("population_size", "--optical-ga-population-size", lambda v: v >= 2, ">= 2"),
+            ("mutation_rate", "--optical-ga-mutation-rate",
              lambda v: 0.0 <= v <= 1.0, "[0.0, 1.0]"),
-            ("mutation_strength", "--ga-mutation-strength",
+            ("mutation_strength", "--optical-ga-mutation-strength",
              lambda v: 0.0 <= v <= 1.0, "[0.0, 1.0]"),
-            ("elite_fraction", "--ga-elite-fraction",
+            ("elite_fraction", "--optical-ga-elite-fraction",
              lambda v: 0.0 <= v <= 1.0, "[0.0, 1.0]"),
-            ("tournament_size", "--ga-tournament-size",
+            ("tournament_size", "--optical-ga-tournament-size",
              lambda v: v >= 2, ">= 2"),
-            ("seed", "--ga-seed", None, None),
+            ("seed", "--optical-ga-seed", None, None),
         ]
-        for _key, _flag, _validator, _range_hint in ga_params:
-            _val = ga.get(_key)
+        for _key, _flag, _validator, _range_hint in oga_params:
+            _val = oga.get(_key)
             if _val is not None:
                 if _validator is not None and not _validator(_val):
                     print(
-                        f"ERROR: ga.{_key} must be {_range_hint}, got {_val}",
+                        f"ERROR: optical_ga.{_key} must be {_range_hint}, got {_val}",
                         file=sys.stderr,
                     )
                     sys.exit(1)
                 cmd.extend([_flag, str(_val)])
+
+        # Dermal chromophores toggle
+        if oga.get("use_dermal_chromophores", False):
+            cmd.append("--optical-ga-use-dermal-chromophores")
 
     # --- MCX options ---
     mcx = config.get("mcx", {})
@@ -246,7 +274,7 @@ def build_pipeline_command(
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            cmd.extend(["--thermal-num-steps", str(num_steps)])
+            cmd.extend(["--thermal-num-steps", str(ns_val)])
 
         # Heat source parameters
         source = thermal.get("source", {})
@@ -298,7 +326,7 @@ def build_pipeline_command(
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            cmd.extend(["--thermal-source-power", str(power)])
+            cmd.extend(["--thermal-source-power", str(pw)])
 
         center = source.get("center")
         if center is not None:
@@ -367,14 +395,13 @@ def build_resolved_config(
         else:
             resolved[key] = val
 
-    # Normalize path-like fields to match execution command behavior.
-    if "label_volume" in resolved and resolved["label_volume"] is not None:
-        resolved["label_volume"] = _resolve_path(str(resolved["label_volume"]), config_dir)
-    if "output_dir" in resolved and resolved["output_dir"] is not None:
-        resolved["output_dir"] = _resolve_path(str(resolved["output_dir"]), config_dir)
-    ga = resolved.get("ga")
-    if isinstance(ga, dict) and ga.get("fitness_json"):
-        ga["fitness_json"] = _resolve_path(str(ga["fitness_json"]), config_dir)
+    # Normalize path-like fields — only for paths that came from the config
+    # file, not CLI overrides (CLI overrides are relative to CWD; the downstream
+    # pipeline does its own Path(…).resolve()).
+    for path_key in ("label_volume", "output_dir"):
+        if path_key not in overrides and path_key in resolved and resolved[path_key] is not None:
+            resolved[path_key] = _resolve_path(str(resolved[path_key]), config_dir)
+    # No fitness_json to resolve for optical_ga (it uses target Lab directly)
     return resolved
 
 
@@ -488,7 +515,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     # --- Write config snapshot to output manifests dir ---
-    # Resolve the output directory from config/overrides so we can write into it.
     resolved_output = overrides.get("output_dir", config.get("output_dir", ""))
     if resolved_output:
         resolved_output_path = Path(_resolve_path(str(resolved_output), config_dir))

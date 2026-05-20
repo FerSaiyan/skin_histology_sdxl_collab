@@ -36,16 +36,20 @@ from scripts.simulation.run_mvp_multiphysics_pipeline import (
 def _make_minimal_args() -> Namespace:
     """Create a Namespace with all attributes the manifest builder expects."""
     return Namespace(
-        ga_mock=True,
-        ga_fitness_json=None,
-        ga_generations=5,
-        ga_population_size=8,
-        ga_mutation_rate=0.2,
-        ga_mutation_strength=0.1,
-        ga_elite_fraction=0.1,
-        ga_tournament_size=3,
-        ga_seed=42,
-        skip_ga=False,
+        optical_ga_forward_mode="surrogate",
+        optical_ga_fitness_mode="lab",
+        optical_ga_target_L=60.0,
+        optical_ga_target_a=10.0,
+        optical_ga_target_b=15.0,
+        optical_ga_generations=3,
+        optical_ga_population_size=8,
+        optical_ga_mutation_rate=0.2,
+        optical_ga_mutation_strength=0.1,
+        optical_ga_elite_fraction=0.1,
+        optical_ga_tournament_size=3,
+        optical_ga_seed=42,
+        optical_ga_use_dermal_chromophores=False,
+        skip_optical_ga=False,
         skip_mcx=False,
         skip_thermal=False,
         mcx_run=False,
@@ -129,12 +133,14 @@ class TestInputArgs:
         manifest = build_manifest(args, {}, "/tmp/vol.npy", "/tmp/my_output")
         assert manifest["input_args"]["output_dir"] == "/tmp/my_output"
 
-    def test_contains_all_flags(self):
+    def test_contains_optical_ga_flags(self):
         args = _make_minimal_args()
         manifest = build_manifest(args, {}, "/tmp/vol.npy", "/tmp/out")
         ia = manifest["input_args"]
-        assert "ga_mock" in ia
-        assert "skip_ga" in ia
+        assert "optical_ga_forward_mode" in ia
+        assert "optical_ga_fitness_mode" in ia
+        assert "optical_ga_generations" in ia
+        assert "skip_optical_ga" in ia
         assert "skip_mcx" in ia
         assert "skip_thermal" in ia
         assert "mcx_run" in ia
@@ -162,13 +168,13 @@ class TestPerStep:
     def test_step_has_required_fields(self):
         args = _make_minimal_args()
         steps = {
-            "ga": _completed_result(),
+            "optical_ga": _completed_result(),
         }
         manifest = build_manifest(args, steps, "/tmp/vol.npy", "/tmp/out")
-        entry = manifest["steps"]["ga"]
+        entry = manifest["steps"]["optical_ga"]
 
         assert "step_name" in entry
-        assert entry["step_name"] == "GA Optimiser"
+        assert entry["step_name"] == "Optical GA"
         assert "status" in entry
         assert entry["status"] == "completed"
         assert "returncode" in entry
@@ -182,11 +188,11 @@ class TestPerStep:
         args = _make_minimal_args()
         manifest = build_manifest(
             args,
-            {"ga": _completed_result()},
+            {"optical_ga": _completed_result()},
             "/tmp/vol.npy",
             "/tmp/out",
         )
-        assert "ga" in manifest["steps"]
+        assert "optical_ga" in manifest["steps"]
         assert "mcx_build" not in manifest["steps"]
 
     def test_failed_step_has_error_field(self):
@@ -199,22 +205,22 @@ class TestPerStep:
 
     def test_stdout_snippet_stored_as_summary(self):
         args = _make_minimal_args()
-        steps = {"ga": _completed_result()}
+        steps = {"optical_ga": _completed_result()}
         manifest = build_manifest(args, steps, "/tmp/vol.npy", "/tmp/out")
-        assert "stdout_summary" in manifest["steps"]["ga"]
+        assert "stdout_summary" in manifest["steps"]["optical_ga"]
 
     def test_stdout_snippet_trimmed_to_5(self):
         """stdout_summary should be at most 5 lines."""
         args = _make_minimal_args()
         long_result = _completed_result()
         long_result["stdout_snippet"] = [f"line{i}" for i in range(20)]
-        steps = {"ga": long_result}
+        steps = {"optical_ga": long_result}
         manifest = build_manifest(args, steps, "/tmp/vol.npy", "/tmp/out")
-        assert len(manifest["steps"]["ga"]["stdout_summary"]) <= 5
+        assert len(manifest["steps"]["optical_ga"]["stdout_summary"]) <= 5
 
     def test_step_name_human_readable(self):
         """step_name should be human-readable, not the internal ID."""
-        assert _step_name("ga") == "GA Optimiser"
+        assert _step_name("optical_ga") == "Optical GA"
         assert _step_name("mcx_build") == "MCX Build Volume"
         assert _step_name("mcx_batch") == "MCX Batch Runner"
         assert _step_name("thermal_solve") == "Thermal Solve (Pennes)"
@@ -243,7 +249,7 @@ class TestSummary:
     def test_mixed_statuses(self):
         args = _make_minimal_args()
         steps: Dict[str, Dict[str, Any]] = {
-            "ga": _completed_result(),
+            "optical_ga": _completed_result(),
             "mcx_build": _failed_result(),
             "mcx_batch": _skipped_result("Skipped as mcx is disabled"),
         }
@@ -274,7 +280,6 @@ class TestSummary:
             }
         }
         manifest = build_manifest(args, steps, "/tmp/vol.npy", "/tmp/out")
-        # timeout sets has_errors but counts as 0 in "errors" (which tracks "error" status)
         assert manifest["summary"]["has_errors"] is True
         assert manifest["summary"]["errors"] == 0
         assert manifest["summary"]["failed"] == 0
@@ -300,27 +305,36 @@ class TestSkippedResult:
 # ---------------------------------------------------------------------------
 
 class TestArtifactsExist:
-    def test_ga_artifacts(self, tmp_path: Path):
-        ga_dir = tmp_path / "ga"
+    def test_optical_ga_artifacts(self, tmp_path: Path):
+        ga_dir = tmp_path / "optical_ga"
         ga_dir.mkdir(parents=True)
         for fname in ("best_genome.json", "ga_history.csv", "population_final.json"):
             (ga_dir / fname).write_text("{}")
 
-        artifacts = _artifacts_exist(tmp_path, "ga")
+        artifacts = _artifacts_exist(tmp_path, "optical_ga")
         assert len(artifacts) == 3
 
-    def test_ga_artifacts_partial(self, tmp_path: Path):
-        ga_dir = tmp_path / "ga"
+    def test_optical_ga_artifacts_partial(self, tmp_path: Path):
+        ga_dir = tmp_path / "optical_ga"
         ga_dir.mkdir(parents=True)
         (ga_dir / "best_genome.json").write_text("{}")
 
-        artifacts = _artifacts_exist(tmp_path, "ga")
+        artifacts = _artifacts_exist(tmp_path, "optical_ga")
         assert len(artifacts) == 1
         assert "best_genome.json" in artifacts[0]
 
-    def test_ga_artifacts_none(self, tmp_path: Path):
-        artifacts = _artifacts_exist(tmp_path, "ga")
+    def test_optical_ga_artifacts_none(self, tmp_path: Path):
+        artifacts = _artifacts_exist(tmp_path, "optical_ga")
         assert artifacts == []
+
+    def test_mcx_artifacts(self, tmp_path: Path):
+        mcx_dir = tmp_path / "mcx"
+        mcx_dir.mkdir(parents=True)
+        for fname in ("mcx_volume.npy", "mcx_media_table.json", "mcx_config.json", "mcx_build_manifest.json"):
+            (mcx_dir / fname).write_text("{}")
+
+        artifacts = _artifacts_exist(tmp_path, "mcx_build")
+        assert len(artifacts) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +352,7 @@ class TestStepOrder:
     def test_step_order_is_complete(self):
         """The step order should cover all current components."""
         expected = [
-            "ga",
+            "optical_ga",
             "mcx_build",
             "mcx_batch",
             "thermal_build",

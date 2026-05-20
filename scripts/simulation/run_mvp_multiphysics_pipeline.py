@@ -2,12 +2,14 @@
 """
 Integrated orchestrator for the MVP multi-physics simulation pipeline.
 
-Chains currently implemented classifier-free components:
+Chains currently implemented components:
 
-  • GA skeleton       — scripts/ga/ga_optimiser.py (mock or JSON-fitness mode)
-  • MCX scaffolding   — scripts/simulation/mcx_build_volume.py
+  * Optical GA        — scripts/optical_ga/ga_optimiser_optical.py
+                        (surrogate or realistic forward model for skin
+                         biophysical parameter estimation)
+  * MCX scaffolding   — scripts/simulation/mcx_build_volume.py
                         + scripts/simulation/mcx_batch_runner.py
-  • Thermal baseline  — scripts/simulation/thermal_build_model.py
+  * Thermal baseline  — scripts/simulation/thermal_build_model.py
                         + scripts/simulation/thermal_solve.py
                         + scripts/simulation/thermal_visualise.py
 
@@ -16,36 +18,30 @@ Subprocess-based — each component is called via its existing CLI.
 Usage examples
 --------------
 
-Minimal smoke run (tiny label volume, GA mock, MCX dry-run):
+Minimal smoke run (tiny label volume, optical GA surrogate, MCX dry-run):
     python -c "
     import numpy as np
     vol = np.array([[[0,0,0,0],[0,1,1,0],[0,1,2,0],[0,0,0,0]]], dtype=np.int32)
     np.save('/tmp/mvp_smoke_labels.npy', vol)
     "
-    python scripts/simulation/run_mvp_multiphysics_pipeline.py \
-        --label-volume /tmp/mvp_smoke_labels.npy \
+    python scripts/simulation/run_mvp_multiphysics_pipeline.py \\
+        --label-volume /tmp/mvp_smoke_labels.npy \\
         --output-dir /tmp/mvp_smoke_run
 
-Full pipeline, skipping GA:
-    python scripts/simulation/run_mvp_multiphysics_pipeline.py \
-        --label-volume /tmp/mvp_smoke_labels.npy \
-        --output-dir /tmp/mvp_thermal_only \
-        --skip-ga \
+Full pipeline, skipping optical GA:
+    python scripts/simulation/run_mvp_multiphysics_pipeline.py \\
+        --label-volume /tmp/mvp_smoke_labels.npy \\
+        --output-dir /tmp/mvp_thermal_only \\
+        --skip-optical-ga \\
         --mcx-run
 
 Fail-fast mode:
-    python scripts/simulation/run_mvp_multiphysics_pipeline.py \
-        --label-volume /tmp/mvp_smoke_labels.npy \
-        --output-dir /tmp/mvp_failfast \
+    python scripts/simulation/run_mvp_multiphysics_pipeline.py \\
+        --label-volume /tmp/mvp_smoke_labels.npy \\
+        --output-dir /tmp/mvp_failfast \\
         --fail-fast
 
-With external GA fitness data:
-    python scripts/simulation/run_mvp_multiphysics_pipeline.py \
-        --label-volume /tmp/mvp_smoke_labels.npy \
-        --output-dir /tmp/mvp_with_data \
-        --ga-fitness-json /path/to/fitness_data.json
-
-Keeping defaults for smoke: GA mock, MCX dry-run, conservative thermal.
+Keeping defaults for smoke: optical GA surrogate, MCX dry-run, conservative thermal.
 """
 
 from __future__ import annotations
@@ -65,13 +61,13 @@ from typing import Any, Dict, List, Optional, Tuple
 # Helpers
 # ---------------------------------------------------------------------------
 
-_STEP_ORDER = ["ga", "mcx_build", "mcx_batch", "thermal_build", "thermal_solve", "thermal_visualise"]
+_STEP_ORDER = ["optical_ga", "mcx_build", "mcx_batch", "thermal_build", "thermal_solve", "thermal_visualise"]
 
 
 def _step_name(step_id: str) -> str:
     """Human-readable step label."""
     labels = {
-        "ga": "GA Optimiser",
+        "optical_ga": "Optical GA",
         "mcx_build": "MCX Build Volume",
         "mcx_batch": "MCX Batch Runner",
         "thermal_build": "Thermal Build Model",
@@ -167,9 +163,9 @@ def _artifacts_exist(output_dir: Path, step_id: str) -> List[str]:
     """Return list of existing artifact paths for a given step."""
     artifacts: List[str] = []
 
-    if step_id == "ga":
+    if step_id == "optical_ga":
         for fname in ("best_genome.json", "ga_history.csv", "population_final.json"):
-            p = output_dir / "ga" / fname
+            p = output_dir / "optical_ga" / fname
             if p.exists():
                 artifacts.append(str(p))
 
@@ -214,45 +210,53 @@ def _artifacts_exist(output_dir: Path, step_id: str) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
-def run_ga(
+def run_optical_ga(
     repo_root: Path,
     output_dir: Path,
-    ga_mock: bool,
-    ga_fitness_json: Optional[str],
-    ga_generations: int = 5,
-    ga_population_size: int = 8,
-    ga_mutation_rate: float = 0.2,
-    ga_mutation_strength: float = 0.1,
-    ga_elite_fraction: float = 0.1,
-    ga_tournament_size: int = 3,
-    ga_seed: int = 42,
+    forward_mode: str = "surrogate",
+    fitness_mode: str = "lab",
+    target_L: float = 60.0,
+    target_a: float = 10.0,
+    target_b: float = 15.0,
+    generations: int = 3,
+    population_size: int = 8,
+    mutation_rate: float = 0.2,
+    mutation_strength: float = 0.1,
+    elite_fraction: float = 0.1,
+    tournament_size: int = 3,
+    seed: int = 42,
+    use_dermal_chromophores: bool = False,
     timeout: int = 300,
 ) -> Dict[str, Any]:
-    """Run GA optimiser with configurable parameters."""
-    ga_dir = output_dir / "ga"
+    """Run the optical GA optimiser for skin biophysical parameter estimation."""
+    ga_dir = output_dir / "optical_ga"
     ga_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
         sys.executable,
-        str(repo_root / "scripts" / "ga" / "ga_optimiser.py"),
-        "--generations", str(ga_generations),
-        "--population-size", str(ga_population_size),
+        str(repo_root / "scripts" / "optical_ga" / "ga_optimiser_optical.py"),
+        "--generations", str(generations),
+        "--population-size", str(population_size),
+        "--target-L", str(target_L),
+        "--target-a", str(target_a),
+        "--target-b", str(target_b),
+        "--forward-mode", forward_mode,
+        "--fitness-mode", fitness_mode,
         "--output-dir", str(ga_dir),
-        "--mutation-rate", str(ga_mutation_rate),
-        "--mutation-strength", str(ga_mutation_strength),
-        "--elite-fraction", str(ga_elite_fraction),
-        "--tournament-size", str(ga_tournament_size),
-        "--seed", str(ga_seed),
+        "--mutation-rate", str(mutation_rate),
+        "--mutation-strength", str(mutation_strength),
+        "--elite-fraction", str(elite_fraction),
+        "--tournament-size", str(tournament_size),
+        "--seed", str(seed),
     ]
 
-    if ga_fitness_json:
-        cmd.extend(["--fitness-json", ga_fitness_json])
-        print("  [ga] Using fitness JSON (real data mode)")
-    else:
-        cmd.append("--mock")
-        print("  [ga] Using mock mode (synthetic metrics)")
+    if use_dermal_chromophores:
+        cmd.append("--use-dermal-chromophores")
 
-    return _run_cmd(cmd, step_id="ga", timeout=timeout)
+    print(f"  [optical_ga] Using forward mode: {forward_mode}, fitness mode: {fitness_mode}")
+    print(f"  [optical_ga] Target Lab: ({target_L}, {target_a}, {target_b})")
+
+    return _run_cmd(cmd, step_id="optical_ga", timeout=timeout)
 
 
 def run_mcx_build(
@@ -421,16 +425,20 @@ def build_manifest(
         "input_args": {
             "label_volume": label_volume_path,
             "output_dir": output_dir,
-            "ga_mock": args.ga_mock,
-            "ga_fitness_json": args.ga_fitness_json,
-            "ga_generations": args.ga_generations,
-            "ga_population_size": args.ga_population_size,
-            "ga_mutation_rate": args.ga_mutation_rate,
-            "ga_mutation_strength": args.ga_mutation_strength,
-            "ga_elite_fraction": args.ga_elite_fraction,
-            "ga_tournament_size": args.ga_tournament_size,
-            "ga_seed": args.ga_seed,
-            "skip_ga": args.skip_ga,
+            "optical_ga_forward_mode": args.optical_ga_forward_mode,
+            "optical_ga_fitness_mode": args.optical_ga_fitness_mode,
+            "optical_ga_target_L": args.optical_ga_target_L,
+            "optical_ga_target_a": args.optical_ga_target_a,
+            "optical_ga_target_b": args.optical_ga_target_b,
+            "optical_ga_generations": args.optical_ga_generations,
+            "optical_ga_population_size": args.optical_ga_population_size,
+            "optical_ga_mutation_rate": args.optical_ga_mutation_rate,
+            "optical_ga_mutation_strength": args.optical_ga_mutation_strength,
+            "optical_ga_elite_fraction": args.optical_ga_elite_fraction,
+            "optical_ga_tournament_size": args.optical_ga_tournament_size,
+            "optical_ga_seed": args.optical_ga_seed,
+            "optical_ga_use_dermal_chromophores": args.optical_ga_use_dermal_chromophores,
+            "skip_optical_ga": args.skip_optical_ga,
             "skip_mcx": args.skip_mcx,
             "skip_thermal": args.skip_thermal,
             "mcx_run": args.mcx_run,
@@ -498,22 +506,24 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description=(
             "Run the MVP multi-physics simulation pipeline end-to-end.\n\n"
-            "Chains GA optimisation + MCX light transport scaffolding + thermal "
-            "(Pennes bioheat) simulation on a shared label volume.\n\n"
-            "All components are classifier-free and use existing CLI interfaces."
+            "Chains Optical GA optimisation + MCX light transport scaffolding "
+            "+ thermal (Pennes bioheat) simulation on a shared label volume.\n\n"
+            "The Optical GA estimates skin biophysical parameters by matching "
+            "a target L*a*b* colour (surrogate mode for development, realistic "
+            "mode with xopto/MCX for production)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n\n"
-            "  # Minimal smoke run (GA mock, MCX dry-run, conservative thermal)\n"
+            "  # Minimal smoke run (optical GA surrogate, MCX dry-run, conservative thermal)\n"
             "  python scripts/simulation/run_mvp_multiphysics_pipeline.py \\\n"
             "      --label-volume /tmp/mvp_smoke_labels.npy \\\n"
             "      --output-dir /tmp/mvp_smoke_run\n\n"
-            "  # Thermal only (skip GA and MCX)\n"
+            "  # Thermal only (skip optical GA and MCX)\n"
             "  python scripts/simulation/run_mvp_multiphysics_pipeline.py \\\n"
             "      --label-volume /tmp/mvp_smoke_labels.npy \\\n"
             "      --output-dir /tmp/mvp_thermal_only \\\n"
-            "      --skip-ga --skip-mcx\n\n"
+            "      --skip-optical-ga --skip-mcx\n\n"
             "  # Full pipeline with real MCX execution (requires MCX binary)\n"
             "  python scripts/simulation/run_mvp_multiphysics_pipeline.py \\\n"
             "      --label-volume /tmp/mvp_smoke_labels.npy \\\n"
@@ -536,76 +546,96 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--output-dir",
         required=True,
         help="Root output directory. Subdirectories will be created: "
-        "ga/, mcx/, thermal/, manifests/.",
+        "optical_ga/, mcx/, thermal/, manifests/.",
     )
-    # GA mode flags
-    ga_group = ap.add_mutually_exclusive_group()
-    ga_group.add_argument(
-        "--ga-mock",
-        action="store_true",
-        default=False,
-        help="Run GA with synthetic mock metrics (default, lightweight for smoke "
-        "testing). Mutually exclusive with --ga-fitness-json.",
-    )
-    ga_group.add_argument(
-        "--ga-fitness-json",
+    # Optical GA mode flags
+    ap.add_argument(
+        "--optical-ga-forward-mode",
         type=str,
-        default=None,
-        help="Path to JSON file with fitness data for GA. "
-        "When provided, GA uses real data instead of mock metrics. "
-        "Expected format: list of genome+metric records (see ga_optimiser.py --help).",
-    )
-    # GA loop parameters
-    ap.add_argument(
-        "--ga-generations",
-        type=int,
-        default=5,
-        help="Number of GA generations (default: 5). Must be >= 1.",
+        default="surrogate",
+        choices=["surrogate", "realistic"],
+        help="Optical GA forward model mode (default: surrogate). "
+        "Use 'realistic' for MC backend (requires xopto or MCX).",
     )
     ap.add_argument(
-        "--ga-population-size",
-        type=int,
-        default=8,
-        help="GA population size per generation (default: 8). Must be >= 2.",
+        "--optical-ga-fitness-mode",
+        type=str,
+        default="lab",
+        choices=["lab", "ita", "ita_no_a"],
+        help="Optical GA fitness mode (default: lab).",
     )
+    # Optical GA target
     ap.add_argument(
-        "--ga-mutation-rate",
+        "--optical-ga-target-L",
         type=float,
-        default=0.2,
-        help="GA per-parameter mutation probability (default: 0.2). "
-        "Expected range [0.0, 1.0].",
+        default=60.0,
+        help="Target CIE L* for optical GA (default: 60.0).",
     )
     ap.add_argument(
-        "--ga-mutation-strength",
+        "--optical-ga-target-a",
         type=float,
-        default=0.1,
-        help="GA mutation strength (stddev in normalised space, default: 0.1). "
-        "Expected range [0.0, 1.0].",
+        default=10.0,
+        help="Target CIE a* for optical GA (default: 10.0).",
     )
     ap.add_argument(
-        "--ga-elite-fraction",
+        "--optical-ga-target-b",
         type=float,
-        default=0.1,
-        help="GA fraction of top individuals preserved (default: 0.1). "
-        "Expected range [0.0, 1.0].",
+        default=15.0,
+        help="Target CIE b* for optical GA (default: 15.0).",
     )
+    # Optical GA loop parameters
     ap.add_argument(
-        "--ga-tournament-size",
+        "--optical-ga-generations",
         type=int,
         default=3,
-        help="GA tournament selection size (default: 3). Must be >= 2.",
+        help="Number of optical GA generations (default: 3). Must be >= 1.",
     )
     ap.add_argument(
-        "--ga-seed",
+        "--optical-ga-population-size",
+        type=int,
+        default=8,
+        help="Optical GA population size (default: 8). Must be >= 2.",
+    )
+    ap.add_argument(
+        "--optical-ga-mutation-rate",
+        type=float,
+        default=0.2,
+        help="Optical GA per-parameter mutation probability (default: 0.2).",
+    )
+    ap.add_argument(
+        "--optical-ga-mutation-strength",
+        type=float,
+        default=0.1,
+        help="Optical GA mutation strength (default: 0.1).",
+    )
+    ap.add_argument(
+        "--optical-ga-elite-fraction",
+        type=float,
+        default=0.1,
+        help="Optical GA fraction of top individuals preserved (default: 0.1).",
+    )
+    ap.add_argument(
+        "--optical-ga-tournament-size",
+        type=int,
+        default=3,
+        help="Optical GA tournament selection size (default: 3). Must be >= 2.",
+    )
+    ap.add_argument(
+        "--optical-ga-seed",
         type=int,
         default=42,
-        help="GA random seed (default: 42).",
+        help="Optical GA random seed (default: 42).",
+    )
+    ap.add_argument(
+        "--optical-ga-use-dermal-chromophores",
+        action="store_true",
+        help="Include optional dermal chromophores in the optical GA genome.",
     )
     # Step toggles
     ap.add_argument(
-        "--skip-ga",
+        "--skip-optical-ga",
         action="store_true",
-        help="Skip the GA optimisation step.",
+        help="Skip the optical GA optimisation step.",
     )
     ap.add_argument(
         "--skip-mcx",
@@ -703,28 +733,29 @@ def _validate_args(args: argparse.Namespace) -> None:
     """Validate runtime argument ranges, raising SystemExit on invalid values."""
     errors: List[str] = []
 
-    # GA parameters
-    if args.ga_generations < 1:
-        errors.append(f"--ga-generations must be >= 1, got {args.ga_generations}")
-    if args.ga_population_size < 2:
-        errors.append(f"--ga-population-size must be >= 2, got {args.ga_population_size}")
-    if not (0.0 <= args.ga_mutation_rate <= 1.0):
+    # Optical GA parameters
+    if args.optical_ga_generations < 1:
+        errors.append(f"--optical-ga-generations must be >= 1, got {args.optical_ga_generations}")
+    if args.optical_ga_population_size < 2:
+        errors.append(f"--optical-ga-population-size must be >= 2, got {args.optical_ga_population_size}")
+    if not (0.0 <= args.optical_ga_mutation_rate <= 1.0):
         errors.append(
-            f"--ga-mutation-rate must be in [0.0, 1.0], got {args.ga_mutation_rate}"
+            f"--optical-ga-mutation-rate must be in [0.0, 1.0], "
+            f"got {args.optical_ga_mutation_rate}"
         )
-    if not (0.0 <= args.ga_mutation_strength <= 1.0):
+    if not (0.0 <= args.optical_ga_mutation_strength <= 1.0):
         errors.append(
-            f"--ga-mutation-strength must be in [0.0, 1.0], "
-            f"got {args.ga_mutation_strength}"
+            f"--optical-ga-mutation-strength must be in [0.0, 1.0], "
+            f"got {args.optical_ga_mutation_strength}"
         )
-    if not (0.0 <= args.ga_elite_fraction <= 1.0):
+    if not (0.0 <= args.optical_ga_elite_fraction <= 1.0):
         errors.append(
-            f"--ga-elite-fraction must be in [0.0, 1.0], "
-            f"got {args.ga_elite_fraction}"
+            f"--optical-ga-elite-fraction must be in [0.0, 1.0], "
+            f"got {args.optical_ga_elite_fraction}"
         )
-    if args.ga_tournament_size < 2:
+    if args.optical_ga_tournament_size < 2:
         errors.append(
-            f"--ga-tournament-size must be >= 2, got {args.ga_tournament_size}"
+            f"--optical-ga-tournament-size must be >= 2, got {args.optical_ga_tournament_size}"
         )
 
     # MCX parameters
@@ -797,10 +828,6 @@ def _validate_manifest(manifest: Dict[str, Any]) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv)
 
-    # Default GA mode to mock unless explicit fitness JSON is provided.
-    if not args.ga_fitness_json:
-        args.ga_mock = True
-
     # Validate argument ranges before launching anything.
     _validate_args(args)
 
@@ -815,41 +842,45 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     # --- Create output subdirs ---
-    for sub in ("ga", "mcx", "thermal", "manifests"):
+    for sub in ("optical_ga", "mcx", "thermal", "manifests"):
         (output_dir / sub).mkdir(parents=True, exist_ok=True)
 
     print(f"=== MVP Multi-Physics Pipeline ===")
-    print(f"  Label volume: {label_volume_path}")
-    print(f"  Output dir  : {output_dir}")
-    print(f"  Fail-fast   : {args.fail_fast}")
-    print(f"  Skip GA     : {args.skip_ga}")
-    print(f"  Skip MCX    : {args.skip_mcx}")
-    print(f"  Skip thermal: {args.skip_thermal}")
+    print(f"  Label volume     : {label_volume_path}")
+    print(f"  Output dir       : {output_dir}")
+    print(f"  Fail-fast        : {args.fail_fast}")
+    print(f"  Skip optical GA  : {args.skip_optical_ga}")
+    print(f"  Skip MCX         : {args.skip_mcx}")
+    print(f"  Skip thermal     : {args.skip_thermal}")
     print()
 
     # --- Steps registry ---
     steps: Dict[str, Dict[str, Any]] = {}
     failed = False
 
-    # ---- Step 1: GA ----
-    if not args.skip_ga and not failed:
-        steps["ga"] = run_ga(
+    # ---- Step 1: Optical GA ----
+    if not args.skip_optical_ga and not failed:
+        steps["optical_ga"] = run_optical_ga(
             repo_root=repo_root,
             output_dir=output_dir,
-            ga_mock=args.ga_mock,
-            ga_fitness_json=args.ga_fitness_json,
-            ga_generations=args.ga_generations,
-            ga_population_size=args.ga_population_size,
-            ga_mutation_rate=args.ga_mutation_rate,
-            ga_mutation_strength=args.ga_mutation_strength,
-            ga_elite_fraction=args.ga_elite_fraction,
-            ga_tournament_size=args.ga_tournament_size,
-            ga_seed=args.ga_seed,
+            forward_mode=args.optical_ga_forward_mode,
+            fitness_mode=args.optical_ga_fitness_mode,
+            target_L=args.optical_ga_target_L,
+            target_a=args.optical_ga_target_a,
+            target_b=args.optical_ga_target_b,
+            generations=args.optical_ga_generations,
+            population_size=args.optical_ga_population_size,
+            mutation_rate=args.optical_ga_mutation_rate,
+            mutation_strength=args.optical_ga_mutation_strength,
+            elite_fraction=args.optical_ga_elite_fraction,
+            tournament_size=args.optical_ga_tournament_size,
+            seed=args.optical_ga_seed,
+            use_dermal_chromophores=args.optical_ga_use_dermal_chromophores,
             timeout=args.timeout,
         )
-        if steps["ga"]["status"] not in ("completed",):
+        if steps["optical_ga"]["status"] not in ("completed",):
             if args.fail_fast:
-                print("\n  [FAIL-FAST] GA step failed. Stopping.")
+                print("\n  [FAIL-FAST] Optical GA step failed. Stopping.")
                 failed = True
 
     # ---- Step 2: MCX Build ----
@@ -868,11 +899,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # ---- Step 3: MCX Batch Runner (depends on MCX build) ----
     if not args.skip_mcx and not failed:
-        # Check if mcx_build succeeded before running batch
         mcx_build_ok = (
             steps.get("mcx_build", {}).get("status") == "completed"
         )
-        # If mcx_build was skipped (no result), still try batch
         if "mcx_build" not in steps or mcx_build_ok:
             steps["mcx_batch"] = run_mcx_batch(
                 repo_root=repo_root,

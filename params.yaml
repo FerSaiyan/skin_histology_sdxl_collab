@@ -1,3 +1,6 @@
+# =============================================================================
+# DATA PIPELINE — needed by everyone (downloads Histo-Seg + builds pair CSV)
+# =============================================================================
 dataset:
   id: vccj8mp2cg
   expected_version: 2
@@ -8,28 +11,18 @@ dataset:
   tile_pairs_stats_json: data/processed/histoseg_tile_pairs_stats.json
   pairs_stats_json: data/processed/histoseg_pairs_stats.json
 
+# =============================================================================
+# AKIO'S PC — SDXL base model + Kohya scripts (needed for LoRA training)
+# Used only when running dvc repro for train_skin_lora_phase1/2/3.
+# Friend's simulation machine can leave these as-is.
+# =============================================================================
 models:
   sdxl_base_model: /home/fertroll10/Documents/ML/SUS_scraper/pretrained_models/sd_xl_base_1.0.safetensors
-  classifier_checkpoint: outputs/classifiers/histoseg_effnet_b0_binary.pth
   kohya_scripts_dir: /home/fertroll10/Documents/ML/SUS_scraper/oral_lesions_project/kohya_ss/sd-scripts
 
-gradcam:
-  mode: gt_segmentation
-  csv: data/processed/histoseg_pairs.csv
-  image_column: image_path
-  mask_column: mask_path
-  label_column: coarse_label
-  output_dir: data/artifacts/roi_masks/histoseg_pairs
-  gt_foreground: all_non_background
-  gt_include_class_ids: ""
-  gt_exclude_class_ids: ""
-  model_config: configs/studies/histoseg_effnet_b0_binary.yaml
-  gradcam_layer: enet.conv_head
-  img_size: 384
-  threshold_quantile: 0.85
-  dilate_radius: 9
-  device: cuda:0
-
+# =============================================================================
+# AKIO'S PC — SDXL LoRA phase config templates
+# =============================================================================
 pipeline:
   phase1_template: configs/sdxl_lora_phase1_skin_histology.yaml
   phase2_template: configs/sdxl_lora_phase2_reward_skin_histology.yaml
@@ -38,16 +31,9 @@ pipeline:
   phase2_runtime: configs/runtime/sdxl_lora_phase2_reward_skin_histology.runtime.yaml
   phase3_runtime: configs/runtime/sdxl_lora_phase3_morph_reward_skin_histology.runtime.yaml
 
-patch_workflow:
-  training_mask_dir: data/artifacts/patches/masks
-  patch_size: 1024
-  target_size: 512
-  padding_ratio: 0.15
-  feather_radius: 16
-  num_steps: 40
-  guidance_scale: 5.0
-  strength: 0.55
-
+# =============================================================================
+# AKIO'S PC — Tile mining & materialization (for SDXL tile-based training)
+# =============================================================================
 tile_mining:
   source_pairs_csv: data/processed/histoseg_pairs.csv
   output_csv: data/processed/histoseg_tile_pairs.csv
@@ -90,14 +76,98 @@ tile_masks:
   feather_radius: 2.0
   mask_strength: 1.0
 
-# --- Phase B: Volume Inpainting Pipeline ---
+# =============================================================================
+# MURILO'S PC — Physics-ready simulation tile dataset (build_tiles_for_simulation)
+# =============================================================================
+simulation_tiles:
+  source_pairs_csv: data/processed/histoseg_pairs.csv
+  output_dir: data/artifacts/tiles_for_simulation
+  manifest_csv: data/artifacts/tiles_for_simulation/tiles_manifest.csv
+  stats_json: data/artifacts/tiles_for_simulation/tiles_stats.json
+  tile_size: 512
+  stride: 256
+  min_tissue_frac: 0.25
+  max_tissue_frac: 0.98
+  min_epidermis_frac: 0.02
+  min_air_epidermis_interface_px: 64
+  min_normal_confidence: 0.55
+  max_tiles_per_image: 0
+  max_total_tiles: 0
+
+# =============================================================================
+# MURILO'S PC — Tile orientation (epidermis-air interface alignment)
+# =============================================================================
+tile_orientation:
+  output_dir: outputs/optical_ga/oriented_tiles
+  tile_size: 512
+  seed: 42
+
+# =============================================================================
+# MURILO'S PC — Optical GA (skin biophysical parameter estimation)
+# =============================================================================
+optical_ga:
+  output_dir: outputs/optical_ga
+  forward_mode: surrogate
+  fitness_mode: lab
+  target_L: 60.0
+  target_a: 10.0
+  target_b: 15.0
+  generations: 5
+  population_size: 20
+  mutation_rate: 0.2
+  mutation_strength: 0.1
+  elite_fraction: 0.1
+  tournament_size: 3
+  seed: 42
+  use_dermal_chromophores: false
+
+# =============================================================================
+# MURILO'S PC — Optical GA batch compare (MCX vs surrogate)
+# =============================================================================
+batch_compare:
+  config: configs/optical_ga_shared_bounds.json
+  output_dir: outputs/optical_ga/batch_compare
+  num_seeds: 5
+  generations: 10
+  population_size: 20
+  forward_mode: surrogate
+  fitness_mode: lab
+  seed_offset: 0
+  require_physical: false
+  allow_surrogate_fallback: true
+
+# =============================================================================
+# MURILO'S PC — Best-run video rendering defaults
+# =============================================================================
+video_render:
+  fps: 5
+  frame_width: 1600
+  frame_height: 900
+  keep_frames: false
+
+# =============================================================================
+# AKIO'S PC — Patch workflow (ROI extraction for 2D SDXL inpainting)
+# Used by extract_roi_patches / inpaint_roi_patches / merge_inpainted_patches.
+# These defaults are also read by render_runtime_configs for mask_dir.
+# =============================================================================
+patch_workflow:
+  training_mask_dir: data/artifacts/patches/masks
+  patch_size: 1024
+  target_size: 512
+  padding_ratio: 0.15
+  feather_radius: 16
+  num_steps: 40
+  guidance_scale: 5.0
+  strength: 0.55
+
+# =============================================================================
+# AKIO'S PC — Phase B: Volume Inpainting Pipeline
+# =============================================================================
 volume_pipeline:
   output_dir: data/artifacts/3d/volume_inpaint_runs
   synthetic_slices_dir: data/artifacts/3d/synthetic_slices
-  # Real model paths (fill these when running with actual SDXL inpainting):
   base_model: null
   lora_weights: null
-  # Default mask / slice geometry for smoke tests:
   slice_height: 256
   slice_width: 256
   mask_radius: 0.3

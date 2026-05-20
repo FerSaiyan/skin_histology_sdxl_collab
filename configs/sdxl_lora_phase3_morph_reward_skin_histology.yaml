@@ -52,8 +52,8 @@ selector:
   label_col: coarse_label
   mask_dir: data/artifacts/patches/masks
 
-  classifier_ckpt: /absolute/path/to/your/histology_classifier.pth
-  classifier_study_config: configs/studies/histoseg_effnet_b0_binary.yaml
+  # classifier_ckpt: (deprecated — removed)
+  # classifier_study_config: (deprecated — removed)
 
   generation_device: cuda
   classifier_device: cuda

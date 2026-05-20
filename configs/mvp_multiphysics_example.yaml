@@ -16,27 +16,36 @@ label_volume: /tmp/mvp_smoke_labels.npy
 output_dir: /tmp/mvp_smoke_run
 
 # ---------------------------------------------------------------------------
-# GA Optimiser options
+# Optical GA (skin biophysical parameter estimation)
+# Replaces the old inpainting hyperparameter GA.
 # ---------------------------------------------------------------------------
-ga:
-  # Enable GA step
+optical_ga:
+  # Enable the optical GA step
   enabled: true
 
-  # Mock mode: use synthetic metrics (lightweight, no external data needed)
-  mock: true
+  # Forward model mode: "surrogate" (default, lightweight, no external deps)
+  #                     "realistic" (requires xopto or MCX backend)
+  forward_mode: surrogate
 
-  # Path to fitness JSON for real GA data mode.
-  # When set, mock is ignored. Expected format: list of genome+metric records.
-  fitness_json: null
+  # Fitness mode: "lab" (default), "ita", or "ita_no_a"
+  fitness_mode: lab
+
+  # Target CIE L*a*b* colour
+  target_L: 60.0
+  target_a: 10.0
+  target_b: 15.0
 
   # GA loop parameters
-  generations: 5
+  generations: 3
   population_size: 8
   mutation_rate: 0.2
   mutation_strength: 0.1
   elite_fraction: 0.1
   tournament_size: 3
   seed: 42
+
+  # Include optional dermal chromophores (bilirubin, biliverdin, COHb, metHb)
+  use_dermal_chromophores: false
 
 # ---------------------------------------------------------------------------
 # MCX (Monte Carlo eXtreme) light transport options

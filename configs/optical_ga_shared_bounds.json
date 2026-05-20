@@ -1,0 +1,54 @@
+{
+  "metadata": {
+    "description": "Shared parameter bounds for MCX vs PyXOpto GA batch comparison. Both branches enforce identical search spans so that per-seed comparisons are fair. Bounds mirror the core param definitions in genome_encoding_optical.py.",
+    "version": "1.0"
+  },
+  "shared_bounds": {
+    "melanin":          [0.0, 0.5],
+    "blood_layer1":     [0.0, 0.1],
+    "blood_layer2":     [0.0, 0.1],
+    "spo2":             [0.5, 1.0],
+    "g_layer0":         [0.85, 0.95],
+    "g_layer1":         [0.85, 0.95],
+    "g_layer2":         [0.85, 0.95],
+    "d_layer0":         [3e-5, 1.5e-4],
+    "d_layer1":         [0.1e-3, 0.5e-3],
+    "amp_layer0":       [0.5, 1.5],
+    "amp_layer1":       [0.5, 1.5],
+    "amp_layer2":       [0.5, 1.5],
+    "water_layer0":     [0.01, 0.8],
+    "water_layer1":     [0.01, 0.8],
+    "water_layer2":     [0.01, 0.8],
+    "fat_layer2":       [0.05, 0.8],
+    "n_mult_layer0":    [0.8, 1.2],
+    "n_mult_layer1":    [0.8, 1.2],
+    "n_mult_layer2":    [0.8, 1.2]
+  },
+  "target_lab": [60.0, 10.0, 15.0],
+  "ga_hyperparams": {
+    "population_size": 50,
+    "mutation_rate": 0.2,
+    "mutation_strength": 0.1,
+    "elite_fraction": 0.1,
+    "tournament_size": 3
+  },
+  "batch": {
+    "num_seeds": 10,
+    "generations": 20,
+    "forward_mode": "realistic",
+    "fitness_mode": "lab",
+    "num_photons": 1000000,
+    "with_specular": true,
+    "use_dermal_chromophores": false
+  },
+  "branches": {
+    "mcx": {
+      "enabled": true,
+      "label": "MCX"
+    },
+    "pyxopto": {
+      "enabled": true,
+      "label": "PyXOpto"
+    }
+  }
+}
