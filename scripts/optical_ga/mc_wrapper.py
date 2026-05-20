@@ -207,6 +207,10 @@ def run_mcx_simulation(
     runs MCX with Fresnel boundary conditions, and extracts the
     reflectance via energy balance from MCX stdout.
 
+    This helper is intentionally scoped to GA parity runs and does not accept
+    arbitrary label volumes from disk. For full-geometry MCX workflows, use
+    `scripts/simulation/mcx_build_volume.py` + `scripts/simulation/mcx_batch_runner.py`.
+
     Parameters
     ----------
     genome : dict

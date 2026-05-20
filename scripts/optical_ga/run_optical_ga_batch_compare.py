@@ -16,6 +16,14 @@ Two forward modes are supported:
   backend.  Falls back to surrogate if the backend is unavailable unless
   ``--require-physical`` is passed.
 
+Important geometry note:
+- This batch compare is a **backend comparison under layered assumptions**.
+  PyXOpto uses `skin.Skin3()` (layered MCML), and the MCX branch uses an
+  internally generated voxelized 3-layer slab from genome thickness values.
+- It does **not** consume arbitrary voxel label volumes in this script.
+  For complex geometry MCX runs, use `scripts/simulation/mcx_build_volume.py`
+  and `scripts/simulation/mcx_batch_runner.py`.
+
 Usage
 -----
 Smoke test (2 seeds, tiny budget, surrogate)::
