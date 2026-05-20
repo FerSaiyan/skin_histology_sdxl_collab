@@ -1,0 +1,1200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skin Histology SDXL Inpainting — Core Ideas</title>
+
+  <!-- Google Fonts: Space Grotesk + Manrope -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Reveal.js via CDN (neutral base — custom CSS handles styling) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@4.3.1/dist/reveal.css" />
+
+  <!-- Tailwind via CDN (utility layer only; we layer it carefully) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      corePlugins: { preflight: false },
+      important: true,
+    };
+  </script>
+
+  <style>
+    /* ═══════════════════════════════════════════════════════════
+       SKIN HISTOLOGY SDXL — Presentation Style System
+       Warm-light, high-readability design with CSS custom properties.
+       ═══════════════════════════════════════════════════════════ */
+
+    /* ── Design Tokens (CSS Variables) ── */
+    :root {
+      --bg-warm-1: #f8f5f0;
+      --bg-warm-2: #f0ebe3;
+      --bg-warm-3: #e8e2d8;
+      --bg-card: #ffffff;
+      --bg-card-hover: #fcfaf8;
+      --bg-subtle: #f5f2ee;
+      --text-primary: #2d2925;
+      --text-secondary: #6b6560;
+      --text-muted: #a09890;
+      --border-card: #e0dad2;
+      --border-table: #d8d2ca;
+      --border-subtle: #ece8e2;
+      --shadow-card: 0 4px 24px rgba(0,0,0,0.05), 0 1px 4px rgba(0,0,0,0.03);
+      --shadow-card-hover: 0 8px 32px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04);
+      --radius-card: 0.875rem;
+      --radius-tag: 999px;
+      --radius-table: 0.625rem;
+
+      /* Accent palette — muted, warm-leaning, accessible */
+      --accent-slate: #4a6fa5;
+      --accent-teal: #2d8a8a;
+      --accent-amber: #b87a3a;
+      --accent-rose: #b5656a;
+      --accent-green: #588556;
+      --accent-red: #b84a4a;
+      --accent-purple: #7a6a9e;
+      --accent-cyan: #3a8a9e;
+      --accent-gold: #9c8528;
+
+      /* Tag backgrounds & borders */
+      --tag-bg-slate: #eef2f8;
+      --tag-border-slate: #d6dfe8;
+      --tag-bg-teal: #ebf4f4;
+      --tag-border-teal: #cde0e0;
+      --tag-bg-amber: #f8f1e8;
+      --tag-border-amber: #e8ddd0;
+      --tag-bg-rose: #f7ecee;
+      --tag-border-rose: #e8d6d8;
+      --tag-bg-green: #eef3ee;
+      --tag-border-green: #d6e3d6;
+      --tag-bg-red: #f8eeee;
+      --tag-border-red: #e8d0d0;
+      --tag-bg-purple: #f1eef6;
+      --tag-border-purple: #ddd6e8;
+      --tag-bg-cyan: #ebf4f6;
+      --tag-border-cyan: #d0e2e8;
+      --tag-bg-gold: #f8f4e8;
+      --tag-border-gold: #e8e0c8;
+    }
+
+    /* ── Base Reveal Overrides ── */
+    .reveal {
+      font-family: 'Manrope', 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
+      color: var(--text-primary);
+    }
+    .reveal h1, .reveal h2, .reveal h3, .reveal h4 {
+      font-family: 'Space Grotesk', 'Manrope', 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
+      text-transform: none;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+    }
+    .reveal h1 { font-size: 2.6em; font-weight: 700; line-height: 1.15; }
+    .reveal h2 { font-size: 1.65em; font-weight: 600; margin-bottom: 0.25em; }
+    .reveal h3 { font-size: 1.15em; font-weight: 600; }
+    .reveal h4 { font-size: 0.95em; font-weight: 600; }
+
+    .reveal .slides section { padding: 0.3rem 0.75rem; }
+
+    /* ── Warm-Light Background with Decorative Blobs ── */
+    body {
+      background: linear-gradient(160deg, var(--bg-warm-1) 0%, var(--bg-warm-2) 50%, var(--bg-warm-3) 100%);
+      background-attachment: fixed;
+    }
+    /* Soft warm peach blob — top-right */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -30%;
+      right: -20%;
+      width: 70%;
+      height: 70%;
+      background: radial-gradient(ellipse at center, rgba(214, 180, 148, 0.25) 0%, transparent 70%);
+      z-index: -1;
+      pointer-events: none;
+    }
+    /* Soft cool-blue blob — bottom-left */
+    body::after {
+      content: '';
+      position: fixed;
+      bottom: -25%;
+      left: -15%;
+      width: 60%;
+      height: 60%;
+      background: radial-gradient(ellipse at center, rgba(148, 180, 214, 0.18) 0%, transparent 70%);
+      z-index: -1;
+      pointer-events: none;
+    }
+
+    .reveal .slides {
+      filter: drop-shadow(0 0 20px rgba(0,0,0,0.03));
+    }
+
+    /* ── Card Component ── */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: var(--radius-card);
+      padding: 1rem 1.25rem;
+      box-shadow: var(--shadow-card);
+      transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+    }
+    .card:hover {
+      border-color: #d4cdc2;
+      box-shadow: var(--shadow-card-hover);
+      background: var(--bg-card-hover);
+    }
+    .card-title {
+      font-family: 'Space Grotesk', 'Manrope', 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
+      font-size: 0.78em;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: var(--accent-slate);
+      margin-bottom: 0.35em;
+    }
+
+    /* ── Tag / Badge System ── */
+    .tag {
+      display: inline-block;
+      padding: 0.2em 0.65em;
+      border-radius: var(--radius-tag);
+      font-size: 0.68em;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      line-height: 1.4;
+      border: 1px solid var(--border-subtle);
+    }
+    .tag-blue   { background: var(--tag-bg-slate); color: var(--accent-slate); border-color: var(--tag-border-slate); }
+    .tag-green  { background: var(--tag-bg-green); color: var(--accent-green); border-color: var(--tag-border-green); }
+    .tag-pink   { background: var(--tag-bg-rose);  color: var(--accent-rose);  border-color: var(--tag-border-rose); }
+    .tag-orange { background: var(--tag-bg-amber); color: var(--accent-amber); border-color: var(--tag-border-amber); }
+    .tag-yellow { background: var(--tag-bg-gold);  color: var(--accent-gold);  border-color: var(--tag-border-gold); }
+    .tag-purple { background: var(--tag-bg-purple); color: var(--accent-purple); border-color: var(--tag-border-purple); }
+    .tag-cyan   { background: var(--tag-bg-cyan);  color: var(--accent-cyan);  border-color: var(--tag-border-cyan); }
+    .tag-red    { background: var(--tag-bg-red);   color: var(--accent-red);   border-color: var(--tag-border-red); }
+
+    /* ── Table Polish ── */
+    .reveal table {
+      font-size: 0.64em;
+      border-collapse: separate;
+      border-spacing: 0;
+      width: 100%;
+      border-radius: var(--radius-table);
+      overflow: hidden;
+      margin: 0;
+    }
+    .reveal table th {
+      background: #ece6de;
+      color: var(--text-primary);
+      font-weight: 600;
+      padding: 0.5em 0.75em;
+      text-align: left;
+      border-bottom: 2px solid var(--border-table);
+    }
+    .reveal table th:first-child { border-radius: var(--radius-table) 0 0 0; }
+    .reveal table th:last-child  { border-radius: 0 var(--radius-table) 0 0; }
+    .reveal table td {
+      padding: 0.45em 0.75em;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text-primary);
+    }
+    .reveal table tbody tr:last-child td { border-bottom: none; }
+    .reveal table tbody tr:last-child td:first-child { border-radius: 0 0 0 var(--radius-table); }
+    .reveal table tbody tr:last-child td:last-child  { border-radius: 0 0 var(--radius-table) 0; }
+    /* Alternating row backgrounds */
+    .reveal table tbody tr:nth-child(even) { background: #faf8f6; }
+    .reveal table tbody tr:nth-child(odd)  { background: var(--bg-card); }
+    .reveal table tbody tr:hover { background: #f3f0ec; }
+    /* Tables inside cards should not add extra margin */
+    .card table { margin: 0; }
+
+    /* ── Flow Arrow ── */
+    .flow-arrow {
+      font-size: 1.6em;
+      color: var(--text-muted);
+      margin: 0 0.15em;
+    }
+
+    /* ── Typography Helpers ── */
+    .text-small  { font-size: 0.68em; }
+    .text-xs     { font-size: 0.55em; }
+    .op-6       { opacity: 0.7; }
+
+    /* Inline code styling */
+    code {
+      font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'SF Mono', monospace;
+      font-size: 0.85em;
+      background: var(--bg-subtle);
+      padding: 0.1em 0.35em;
+      border-radius: 0.25em;
+      color: var(--accent-rose);
+    }
+    pre code {
+      background: none;
+      padding: 0;
+      border-radius: 0;
+      color: inherit;
+    }
+
+    /* ── Fragment Tweak ── */
+    .reveal .slides section .fragment {
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+    .reveal .slides section .fragment.visible {
+      opacity: 1;
+    }
+
+    /* ── Slide Sizing ── */
+    .reveal .slides { height: 100%; }
+    .reveal .slides > section {
+      min-height: 100%;
+      display: flex !important;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    /* ── Footer ── */
+    .repo-footer {
+      position: fixed;
+      bottom: 10px;
+      left: 20px;
+      right: 20px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.52em;
+      color: var(--text-muted);
+      z-index: 100;
+      pointer-events: none;
+    }
+    .repo-footer span {
+      background: rgba(255,255,255,0.75);
+      backdrop-filter: blur(4px);
+      padding: 3px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border-card);
+      color: var(--text-secondary);
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       OVERRIDES — Inline Dracula colors → new palette
+       These target inline `style` attributes left in slide HTML.
+       ═══════════════════════════════════════════════════════════ */
+
+    /* Title slide — override dark card background */
+    #title-slide .card {
+      background: var(--bg-card) !important;
+      border-color: var(--border-card) !important;
+    }
+    /* Title gradient text */
+    #title-slide h1 {
+      background: linear-gradient(135deg, var(--accent-slate), var(--accent-purple)) !important;
+      -webkit-background-clip: text !important;
+      background-clip: text !important;
+      -webkit-text-fill-color: transparent !important;
+    }
+    /* Title subtitle */
+    #title-slide p[style*="-webkit-text-fill-color"] {
+      -webkit-text-fill-color: var(--text-secondary) !important;
+      color: var(--text-secondary) !important;
+    }
+
+    /* ── Card inline border-color override ── */
+    .card[style*="border-color"] {
+      border-color: var(--border-card) !important;
+    }
+    /* ── Card-title inline color override: default → slate ── */
+    .card-title[style*="color"] {
+      color: var(--accent-slate) !important;
+    }
+    /* Preserve semantic meaning for card-titles with specific dracula colors */
+    .card-title[style*="#ff5555"] { color: var(--accent-red) !important; }
+    .card-title[style*="#ffb86c"] { color: var(--accent-amber) !important; }
+    .card-title[style*="#50fa7b"] { color: var(--accent-green) !important; }
+    .card-title[style*="#8be9fd"] { color: var(--accent-cyan) !important; }
+
+    /* ── Caution / warning boxes ── */
+    [style*="border-left: 3px solid #ff5555"] {
+      border-left-color: var(--accent-red) !important;
+      background: rgba(184, 74, 74, 0.06) !important;
+    }
+    [style*="color:#ff5555"] {
+      color: var(--accent-red) !important;
+    }
+
+    /* ── Divider lines (hr) ── */
+    hr[style*="border-color"] {
+      border-color: var(--border-card) !important;
+    }
+
+    /* ── Flowchart lane border colors ── */
+    [style*="border-left:2px solid #6272a4"] { border-left-color: var(--accent-slate) !important; }
+    [style*="border-left:2px solid #8be9fd"] { border-left-color: var(--accent-cyan) !important; }
+    [style*="border-left:2px solid #f1fa8c"] { border-left-color: var(--accent-gold) !important; }
+    [style*="border-left:2px solid #ff79c6"] { border-left-color: var(--accent-rose) !important; }
+    [style*="border-left:2px solid #50fa7b"] { border-left-color: var(--accent-green) !important; }
+
+    /* ── Flowchart node backgrounds (override Tailwind bg-white/{opacity}) ── */
+    .min-w-0 .rounded {
+      background: var(--bg-subtle) !important;
+    }
+
+    /* ── Flowchart lane separators (override Tailwind border-white/{opacity}) ── */
+    [class*="border-b"][class*="border-white"] {
+      border-color: var(--border-card) !important;
+    }
+
+    /* ═══════════════════════════════════════════════════════════
+       RESPONSIVE — Viewport & Grid Overrides
+       ═══════════════════════════════════════════════════════════ */
+
+    /* Let max-width containers expand more on big screens */
+    @media (min-width: 1400px) {
+      .max-w-3xl { max-width: 64rem !important; }
+      .max-w-5xl { max-width: 80rem !important; }
+      .max-w-6xl { max-width: 96rem !important; }
+    }
+    @media (min-width: 1800px) {
+      .max-w-3xl { max-width: 72rem !important; }
+      .max-w-5xl { max-width: 96rem !important; }
+      .max-w-6xl { max-width: 110rem !important; }
+    }
+
+    /* Stack multi-column grids on narrow viewports */
+    @media (max-width: 700px) {
+      .grid-cols-3 { grid-template-columns: 1fr !important; }
+      .grid-cols-2 { grid-template-columns: 1fr !important; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Footer ── -->
+  <div class="repo-footer">
+    <span>skin_histology_sdxl_collab</span>
+    <span class="slide-number-style">Slide <span id="slide-num">1</span></span>
+  </div>
+
+  <div class="reveal">
+    <div class="slides">
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 1: TITLE                                                    -->
+      <!-- ================================================================ -->
+      <section id="title-slide" >
+        <div class="card max-w-3xl mx-auto" style="background: rgba(0,0,0,0.4); border-color: rgba(139,233,253,0.15);">
+          <div class="mb-6">
+            <span class="tag tag-cyan mr-2">SDXL LoRA</span>
+            <span class="tag tag-purple">Inpainting</span>
+            <span class="tag tag-orange ml-2">Multi-Physics</span>
+          </div>
+          <h1 style="font-size: 2.8em; font-weight: 700; background: linear-gradient(135deg, #8be9fd, #bd93f9); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">
+            Skin Histology<br />SDXL Inpainting
+          </h1>
+          <p class="text-xl mt-4 op-6" style="-webkit-text-fill-color: #f8f8f2;">
+            From 2D tile editing → 3D coherent volumes → multi-physics simulation
+          </p>
+          <div class="mt-6 flex flex-wrap justify-center gap-2 text-small">
+            <span class="tag tag-green">Histo-Seg (vccj8mp2cg)</span>
+            <span class="tag tag-blue">Grad-CAM ROIs</span>
+            <span class="tag tag-pink">Phase 1/2/3 LoRA</span>
+            <span class="tag tag-yellow">MCX · PyXOpto · GA</span>
+          </div>
+          <p class="mt-8 text-xs op-6">skin_histology_sdxl_collab · Technical Overview</p>
+        </div>
+
+        <aside class="notes">
+          Welcome. This deck presents the core ideas behind our skin histology
+          SDXL inpainting pipeline: how we go from raw tiles to 3D volumes and
+          multi-physics simulation inputs.
+        </aside>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 2: MOTIVATION                                              -->
+      <!-- ================================================================ -->
+      <section id="motivation" >
+        <h2>🎯 Motivation</h2>
+        <p class="text-small op-6 mb-4">Why build synthetic histology variants via SDXL inpainting?</p>
+        <div class="grid grid-cols-3 gap-4 mt-2 max-w-5xl mx-auto">
+          <div class="card">
+            <div class="card-title">Clinical Data Scarcity</div>
+            <ul class="list-disc list-inside text-small space-y-1">
+              <li>High-quality 3D histology volumes are rare, expensive, and time-consuming to acquire</li>
+              <li>Generating synthetic variants from existing 2D slices is a practical path to larger, more diverse datasets</li>
+            </ul>
+            <div class="mt-2">
+              <span class="tag tag-blue">synthetic augmentation</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">Mask-First Editing</div>
+            <ul class="list-disc list-inside text-small space-y-1">
+              <li>Inpaint only inside a user-defined mask region; preserve original tissue everywhere else</li>
+              <li>The mask is the <strong>ground-truth anchor</strong> — what you edit is what the mask defines</li>
+            </ul>
+            <div class="mt-2">
+              <span class="tag tag-green">semantic-mask-as-GT</span>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">Multi-Physics Bridge</div>
+            <ul class="list-disc list-inside text-small space-y-1">
+              <li>Light transport: MCX (GPU Monte Carlo) &amp; PyXOpto (CPU MCML)</li>
+              <li>Biophysical parameter estimation: genetic algorithm on optical properties</li>
+              <li>Thermal simulation: finite-difference Pennes bioheat equation</li>
+            </ul>
+            <div class="mt-2">
+              <span class="tag tag-orange">simulation-ready</span>
+            </div>
+          </div>
+        </div>
+        <p class="text-xs op-6 mt-3">
+          <span class="tag tag-cyan mr-1">key insight</span>
+          Single pipeline, multiple outputs — the same LoRA inpainting engine serves 2D tile editing, 3D coherent volumes, and simulation-ready property maps.
+        </p>
+        <aside class="notes">
+          This is fundamentally a data-side project: we are not training a medical
+          classifier; we are generating plausible histological variants from limited
+          source data, then using those variants as input to physics simulation stacks.
+        </aside>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 3: DATASET LANDSCAPE TABLE                                 -->
+      <!-- ================================================================ -->
+      <section id="dataset-landscape" >
+        <h2>🗂️ Dataset Landscape</h2>
+        <div class="mt-2 max-w-5xl mx-auto card" style="padding: 0.5rem 1rem;">
+          <table class="w-full">
+            <thead>
+              <tr>
+                <th>Dataset</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Labels</th>
+                <th>Status</th>
+                <th>Role</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Histo-Seg</strong> (vccj8mp2cg, v2)</td>
+                <td><span class="tag tag-cyan">2D full-slide + masks</span></td>
+                <td>~150 image/mask pairs</td>
+                <td>12-class semantic</td>
+                <td><span class="tag tag-green">downloaded, processed</span></td>
+                <td>Primary training &amp; evaluation</td>
+              </tr>
+              <tr>
+                <td><strong>Zenodo 8155124</strong> (melanoma)</td>
+                <td><span class="tag tag-purple">2D slice stack</span></td>
+                <td>~700 MB, <strong>66 slices</strong></td>
+                <td>Melanoma patches</td>
+                <td><span class="tag tag-yellow">optional</span></td>
+                <td>3D volume benchmark, Z-coherence</td>
+              </tr>
+              <tr>
+                <td><strong>MATRICS-A</strong></td>
+                <td><span class="tag tag-red">3D block-face</span></td>
+                <td>hundreds of GB</td>
+                <td>Full volumetric histology</td>
+                <td><span class="tag tag-red">out of scope</span></td>
+                <td>Future scale-up</td>
+              </tr>
+              <tr>
+                <td><em>Synthetic circular masks</em></td>
+                <td><span class="tag tag-cyan">2D programmatic</span></td>
+                <td>configurable</td>
+                <td>Binary (tissue / void)</td>
+                <td><span class="tag tag-green">generated in pipeline</span></td>
+                <td>MVP fallback</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- ⚠️ Critical dataset caution -->
+        <div class="max-w-5xl mx-auto mt-3 text-xs" style="border-left: 3px solid #ff5555; padding-left: 0.8rem; background: rgba(255,85,85,0.06); border-radius: 0 0.5rem 0.5rem 0;">
+          <p class="font-bold" style="color:#ff5555;">⚠️ Critical Caution: Zenodo Slice Subsets</p>
+          <p class="op-6">The repo contains <strong>derived subsets</strong> that are <em>not</em> the full 66-slice Zenodo sequence:</p>
+          <ul class="list-disc list-inside op-6 space-y-0.5 mt-1">
+            <li><code>data/benchmarks/melanoma_3d/original_hr_prepped_tl/</code> — a <strong>20-slice subset</strong> (2_01_a → 2_20_a) padded to common canvas. High-res but <strong>not</strong> the full sequential volume.</li>
+            <li><code>data/benchmarks/melanoma_3d/slices/</code> — legacy low-res stack. Do not use for new tile inpainting, comparisons, or QC plots.</li>
+          </ul>
+          <p class="op-6 mt-1"><strong>Correct workflow:</strong> Use <code>scripts/3d/build_sequential_slice_stack.py</code> on all 66 raw <code>cropped_slices/*.png</code> in source order — it validates sequence contiguity and rejects non-contiguous globs.</p>
+        </div>
+
+        <p class="text-xs op-6 mt-3">Constraint: No large dataset downloads (MATRICS-A, hundreds of GB) for MVP. Everything works with Histo-Seg + synthetic masks + optionally the ~700 MB Zenodo benchmark.</p>
+        <aside class="notes">
+          The dataset landscape is deliberately constrained. We are not trying to match
+          the scale of TCGA or MATRICS-A. The derived-subset warning is important:
+          if someone grabs the prepped 20-slice stack and runs analysis, they may make
+          sequential-volume claims that don't hold for the full 66-slice sequence.
+        </aside>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 4: END-TO-END FLOWCHART (5 lanes: Data → Geometry → Synthesis → Physics → Validation) -->
+      <!-- ================================================================ -->
+      <section id="e2e-flowchart" >
+        <h2>🔁 End-to-End Pipeline</h2>
+        <p class="text-xs op-6 mb-2">Five swimlanes · left → right flow · <span class="tag tag-green">implemented</span> <span class="tag tag-yellow">in progress</span> <span class="tag tag-red">future</span></p>
+
+        <div class="card max-w-6xl mx-auto mt-1 text-xs leading-tight" style="padding:0.6rem 0.8rem;">
+
+          <!-- Row: lane label + vertical timeline column, then node chain -->
+
+          <!-- Lane 1: Data -->
+          <div class="flex items-start gap-2 py-1.5 border-b border-white/5 last:border-0">
+            <div class="w-14 shrink-0 text-center pt-0.5" style="border-left:2px solid #6272a4; padding-left:0.3rem;">
+              <span class="tag tag-cyan" style="font-size:0.55em; display:block;">DATA</span>
+              <span style="font-size:0.45em; opacity:0.5;">done</span>
+            </div>
+            <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Histo-Seg Acq</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Pairs CSV (coarse labels)</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Tile Mining 512²</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">HR Source Guardrail</span>
+            </div>
+          </div>
+
+          <!-- Lane 2: Geometry -->
+          <div class="flex items-start gap-2 py-1.5 border-b border-white/5 last:border-0">
+            <div class="w-14 shrink-0 text-center pt-0.5" style="border-left:2px solid #8be9fd; padding-left:0.3rem;">
+              <span class="tag tag-blue" style="font-size:0.55em; display:block;">GEOMETRY</span>
+              <span style="font-size:0.45em; opacity:0.5;">done</span>
+            </div>
+            <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Grad-CAM / Random / Tissue</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Cylindrical Z-propagation</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Strict BBox Validation</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">ROI Patch Extraction</span>
+            </div>
+          </div>
+
+          <!-- Lane 3: Synthesis -->
+          <div class="flex items-start gap-2 py-1.5 border-b border-white/5 last:border-0">
+            <div class="w-14 shrink-0 text-center pt-0.5" style="border-left:2px solid #f1fa8c; padding-left:0.3rem;">
+              <span class="tag tag-yellow" style="font-size:0.55em; display:block;">SYNTHESIS</span>
+              <span style="font-size:0.45em; opacity:0.5;">done</span>
+            </div>
+            <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Phase 1 — Vanilla LoRA</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Phase 2 — Reward Guided</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Phase 3 — Morph Reward</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Patch Inpainting @ 512</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Feather-Stitch Merge</span>
+            </div>
+          </div>
+
+          <!-- Lane 4: Physics -->
+          <div class="flex items-start gap-2 py-1.5 border-b border-white/5 last:border-0">
+            <div class="w-14 shrink-0 text-center pt-0.5" style="border-left:2px solid #ff79c6; padding-left:0.3rem;">
+              <span class="tag tag-pink" style="font-size:0.55em; display:block;">PHYSICS</span>
+              <span style="font-size:0.45em; opacity:0.5;">scaffold</span>
+            </div>
+            <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">NIfTI Volume Stack</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Optical GA (19-param)</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">MCX Light Transport</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Pennes Thermal Solver</span>
+            </div>
+          </div>
+
+          <!-- Lane 5: Validation -->
+          <div class="flex items-start gap-2 py-1.5 border-b border-white/5 last:border-0">
+            <div class="w-14 shrink-0 text-center pt-0.5" style="border-left:2px solid #50fa7b; padding-left:0.3rem;">
+              <span class="tag tag-green" style="font-size:0.55em; display:block;">VALIDATION</span>
+              <span style="font-size:0.45em; opacity:0.5;">next</span>
+            </div>
+            <div class="flex items-center gap-1.5 flex-wrap min-w-0">
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Z-Coherence Metrics</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Seq Integrity Check</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">HR Source Provenance</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Tissue-Aware Diag</span>
+              <span class="op-6" style="font-size:0.7em;">→</span>
+              <span class="px-1.5 py-0.5 rounded bg-white/5 whitespace-nowrap">Cross-Run Comparison</span>
+            </div>
+          </div>
+
+          <hr style="border-color: rgba(255,255,255,0.06); margin: 0.4rem 0;" />
+          <div class="text-center">
+            <span class="tag tag-cyan mr-2" style="font-size:0.5em;">principle</span>
+            <span class="op-6" style="font-size:0.5em;">Mask is the ground-truth anchor for all downstream editing and simulation.</span>
+          </div>
+        </div>
+        <aside class="notes">
+          This pipeline has five lanes, read left to right. Data: start with Histo-Seg,
+          build pairs CSV, mine tiles, verify HR sources. Geometry: masks come from
+          Grad-CAM, random brushes, or tissue-aware selection; propagated identically
+          through Z. Synthesis: three-phase LoRA loop then patch inpainting. Physics:
+          stack to NIfTI, optical GA, MCX light transport, Pennes thermal. Validation:
+          Z-coherence, sequential integrity, provenance, diagnostics, comparison.
+          Key principle throughout: the mask is the ground-truth anchor.
+        </aside>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 5: HISTOSEG-FIRST STRATEGY                                 -->
+      <!-- ================================================================ -->
+      <section id="histoseg-first" >
+        <h2>📌 HistoSeg-First Strategy</h2>
+        <p class="text-small op-6 mb-3">Why start with Histo-Seg instead of Zenodo or MATRICS-A?</p>
+        <div class="grid grid-cols-2 gap-5 max-w-5xl mx-auto mt-1">
+          <div class="card">
+            <div class="card-title">Why HistoSeg?</div>
+            <ul class="list-disc list-inside text-small space-y-1">
+              <li>Curated skin histology with <strong>12-class semantic masks</strong> (epidermis, dermis, BCC, SCC, inflammation, glands, hair follicles…)</li>
+              <li>Masks are manually annotated — <em>not</em> synthetic</li>
+              <li>~150 image/mask pairs — manageable for MVP iteration</li>
+              <li>Coarse binary labels from filename groups:
+                <span class="tag tag-blue">A → non_cancer</span>
+                <span class="tag tag-pink">B/C/D → cancer</span>
+                — guarantees two balanced classes for Phase 2/3 reward</li>
+              <li>Immediate tile-mining: each full slice (e.g. 5000×5000) yields hundreds of 512² candidates</li>
+            </ul>
+          </div>
+          <div class="card">
+            <div class="card-title">Pipeline Integration Points</div>
+            <table class="w-full text-small">
+              <tr><th>Stage</th><th>Script</th><th>Output</th></tr>
+              <tr><td>Pairs</td><td><code>build_histoseg_pairs_csv.py</code></td><td>CSV: image_path, mask_path, coarse_label, slice_id</td></tr>
+              <tr><td>Tile index</td><td><code>build_tile_index_from_masks.py</code></td><td>CSV of 512² coordinates filtered by coverage + white cap</td></tr>
+              <tr><td>Materialise</td><td><code>materialize_histoseg_tile_dataset</code></td><td>Extracted 512² tile PNGs</td></tr>
+              <tr><td>Rand masks</td><td><code>generate_random_masks.py</code></td><td>Organic brush masks (MVP fallback)</td></tr>
+              <tr><td>Grad-CAM</td><td><code>build_roi_masks_gradcam.py</code></td><td>Classifier-saliency masks (when checkpoint available)</td></tr>
+            </table>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-5 max-w-5xl mx-auto mt-3 text-xs">
+          <div class="card" style="border-color: rgba(255,184,108,0.15);">
+            <div class="card-title" style="color:#ffb86c;">Why Not Zenodo?</div>
+            <p class="op-6">No semantic masks — only coarse region annotations. The 66-slice stack is for Z-coherence benchmarking, not tissue-aware inpainting training.</p>
+          </div>
+          <div class="card" style="border-color: rgba(255,85,85,0.15);">
+            <div class="card-title" style="color:#ff5555;">Why Not MATRICS-A?</div>
+            <p class="op-6">Hundreds of GB, out of scope. Pipeline is mask-agnostic — when better data arrives, nothing else changes.</p>
+          </div>
+        </div>
+        <p class="text-xs op-6 mt-2">Semantic masks are the preferred ground truth; random masks serve as the practical MVP fallback.</p>
+        <aside class="notes">
+          HistoSeg is the proving ground. The 12-class masks let us evaluate how mask
+          quality affects inpainting output without waiting for a YOLO detector.
+          The coarse binary labels are a simple heuristic that works surprisingly well
+          for reward-guided LoRA training.
+        </aside>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 6: TILE GEOMETRY PIPELINE                                  -->
+      <!-- ================================================================ -->
+      <section id="tile-geometry" >
+        <h2>🧩 Tile Geometry Pipeline</h2>
+        <p class="text-small op-6 mb-2">How tiles are extracted, filtered, and oriented.</p>
+        <div class="grid grid-cols-2 gap-4 max-w-5xl mx-auto mt-1">
+          <div class="card">
+            <div class="card-title">Tile Mining Parameters</div>
+            <table class="w-full text-small">
+              <tr><th>Parameter</th><th>Value</th><th>Rationale</th></tr>
+              <tr><td>Tile size</td><td>512 × 512</td><td>Matches SDXL resolution</td></tr>
+              <tr><td>Stride</td><td>64 px</td><td>~94% overlap for 5K×5K</td></tr>
+              <tr><td>Min mask</td><td>≥ 15%</td><td>Reject low-tissue tiles</td></tr>
+              <tr><td>Max mask</td><td>≤ 95%</td><td>Reject likely artefacts</td></tr>
+              <tr><td>Max white</td><td>≤ 30%</td><td>Drop empty / glare tiles</td></tr>
+              <tr><td>White thr.</td><td>235</td><td>RGB ≥ 235 → white void</td></tr>
+              <tr><td>Max/image</td><td>250</td><td>Budget cap per source</td></tr>
+              <tr><td>Selection</td><td>random</td><td>Stochastic over bias</td></tr>
+            </table>
+          </div>
+          <div class="card">
+            <div class="card-title">Epidermis-Air Orientation</div>
+            <p class="text-small">For optical simulation, the epidermis-air normal must point consistently (tile top edge).</p>
+            <ul class="list-disc list-inside text-small space-y-1 mt-2">
+              <li><code>estimate_epidermis_normal.py</code> — fits boundary from segmentation mask (air=0, epidermis=1)</li>
+              <li><code>select_orient_tile_for_incidence.py</code> — rotates + crops 512² so normal points to top edge. No padded canvas.</li>
+            </ul>
+            <p class="text-xs op-6 mt-2"><strong>Convention:</strong> outward normal points air → epidermis. Rotation aligns to image −y (up).</p>
+          </div>
+        </div>
+        <div class="card max-w-5xl mx-auto mt-3 text-xs">
+          <div class="grid grid-cols-3 gap-3 text-small">
+            <div>
+              <span class="tag tag-cyan" style="font-size:0.65em;">Extract ROI Patches</span><br />
+              <span class="op-6" style="font-size:0.75em;">Full-res crops around mask bbox. Strict mode: bbox ≤ patch size, zero padding.</span>
+            </div>
+            <div>
+              <span class="tag tag-blue" style="font-size:0.65em;">Inpaint at Model Res</span><br />
+              <span class="op-6" style="font-size:0.75em;">SDXL LoRA at target_size (512), strength 0.55, 40 steps.</span>
+            </div>
+            <div>
+              <span class="tag tag-green" style="font-size:0.65em;">Merge + QC</span><br />
+              <span class="op-6" style="font-size:0.75em;">Feather-stitch patches; QC validates seam diff + CIELAB ΔE*.</span>
+            </div>
+          </div>
+          <hr style="border-color: rgba(255,255,255,0.06); margin: 0.5rem 0;" />
+          <p class="text-center">
+            <span class="tag tag-yellow mr-1" style="font-size:0.55em;">key</span>
+            <span class="op-6" style="font-size:0.6em;">Tile-first avoids full-slice resize. Patches extracted, inpainted, merged at original resolution.</span>
+          </p>
+        </div>
+        <p class="text-xs op-6 mt-2">
+          <span class="tag tag-purple mr-1">materialisation</span>
+          Build tile index CSV (KB) → materialise once to <code>data/artifacts/tiles/materialized_512/</code> → all three LoRA phases reuse.
+        </p>
+        <aside class="notes">
+          The tile geometry pipeline is deliberately simple and stateless. We do not
+          try to align tiles to anatomical structures at this stage — the orientation
+          step runs later for optical GA. Tile filtering is a rejection pipeline:
+          define clear exclusion criteria and randomise within the pass set.
+        </aside>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 7: GEOMETRY-ONLY LIMITATION                                -->
+      <!-- ================================================================ -->
+      <section id="geometry-limitation" >
+        <h2>⚠️ Geometry-Only Limitation</h2>
+        <p class="text-small op-6 mb-2">Why geometry-only masks are not sufficient for multi-physics simulation.</p>
+        <div class="grid grid-cols-2 gap-4 max-w-5xl mx-auto mt-1">
+          <div class="card" style="border-color: rgba(255,85,85,0.2);">
+            <div class="card-title" style="color: #ff5555;">Current Gap</div>
+            <table class="w-full text-small">
+              <tr><th>Limitation</th><th>Impact</th></tr>
+              <tr><td>LoRA learns texture, not semantics</td><td>Cannot distinguish "dermis vs BCC" inside mask</td></tr>
+              <tr><td>Random masks are geometry-only</td><td>Define <em>where</em> but not <em>what</em> tissue class</td></tr>
+              <tr><td>Grad-CAM quality issues</td><td>Saliency maps noisy; thresholding brittle</td></tr>
+              <tr><td>No per-tissue optical props in masks</td><td>Cannot tell GA "melanin-rich" vs "collagen"</td></tr>
+              <tr><td>Z-coherence measured, not enforced</td><td>SSIM computed after generation; model does not optimise</td></tr>
+            </table>
+          </div>
+          <div class="card" style="border-color: rgba(80,250,123,0.2);">
+            <div class="card-title" style="color: #50fa7b;">Mitigations</div>
+            <table class="w-full text-small">
+              <tr><th>Mitigation</th><th>Status</th></tr>
+              <tr><td>Semantic masks as preferred GT</td><td><span class="tag tag-red" style="font-size:0.6em;">future</span></td></tr>
+              <tr><td>Phase 2/3 reward loops</td><td><span class="tag tag-green" style="font-size:0.6em;">done</span></td></tr>
+              <tr><td>Tile filters (tissue ≥15%, white ≤30%)</td><td><span class="tag tag-green" style="font-size:0.6em;">done</span></td></tr>
+              <tr><td>Optical GA label bridge</td><td><span class="tag tag-green" style="font-size:0.6em;">done</span></td></tr>
+              <tr><td>Affine Z-warping (relaxed cylinders)</td><td><span class="tag tag-yellow" style="font-size:0.6em;">planned</span></td></tr>
+              <tr><td>Z-smoothness reward in LoRA</td><td><span class="tag tag-red" style="font-size:0.6em;">future</span></td></tr>
+            </table>
+          </div>
+        </div>
+        <!-- Why this matters -->
+        <div class="card max-w-5xl mx-auto mt-3 text-xs" style="border-color: rgba(255,184,108,0.15);">
+          <div class="card-title" style="color:#ffb86c;">Why This Matters for Physics Simulation</div>
+          <div class="grid grid-cols-3 gap-3 text-small">
+            <div><span class="tag tag-purple" style="font-size:0.6em;">homogenous phantom</span><br /><span class="op-6">Optical/thermal sims need per-label property maps. A geometry-only mask without class info produces physically unrealistic results.</span></div>
+            <div><span class="tag tag-cyan" style="font-size:0.6em;">orientation matters</span><br /><span class="op-6">Epidermis-air normal angle affects Fresnel reflection. Arbitrarily rotated tiles give different MCX reflectance.</span></div>
+            <div><span class="tag tag-pink" style="font-size:0.6em;">cylindrical artifact</span><br /><span class="op-6">Real features change shape across slices. Identical (x,y) mask on every slice creates an artificial cylinder.</span></div>
+          </div>
+        </div>
+        <p class="text-xs mt-2 text-center">
+          <span class="tag tag-orange mr-1">insight</span>
+          <span class="op-6">The pipeline is mask-agnostic — better masks directly yield better results. Every stage works with any binary mask; no refactoring needed.</span>
+        </p>
+        <aside class="notes">
+          This is the most important slide to convey honestly. Geometry-only masks
+          are a pragmatic starting point. For downstream multi-physics simulation,
+          class-aware masks are essential — and the pipeline is designed to accommodate
+          them with no refactoring.
+        </aside>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 8: OPTICAL OPTIMIZATION LOOP (GA)                          -->
+      <!-- ================================================================ -->
+      <section id="optical-optimization" >
+        <h2>🔬 Optical Optimization Loop (GA)</h2>
+        <p class="text-small op-6 mb-2">Fit a 19-parameter skin model so predicted reflectance matches a target L*a*b* / ITA° colour.</p>
+        <div class="grid grid-cols-2 gap-4 max-w-5xl mx-auto mt-1">
+          <div class="card">
+            <div class="card-title">Genome Overview</div>
+            <table class="w-full text-small">
+              <tr><th>Category</th><th>Parameters</th><th>Range</th></tr>
+              <tr><td>Epidermal melanin</td><td>melanin_concentration</td><td>0–40 %</td></tr>
+              <tr><td>Dermal blood</td><td>vol_fraction, O₂ sat</td><td>0.5–10 %, 50–100 %</td></tr>
+              <tr><td>Scattering</td><td>µs'(500nm), power</td><td>10–50 cm⁻¹, 0.5–2.0</td></tr>
+              <tr><td>Geometry</td><td>epi / derm thickness</td><td>0.04–0.15 / 0.5–3.0 mm</td></tr>
+              <tr><td>Auxiliary</td><td>refractive indices, baselines</td><td>fixed / narrow bounds</td></tr>
+            </table>
+            <hr style="border-color: rgba(255,255,255,0.06); margin: 0.4rem 0;" />
+            <p class="text-xs op-6"><strong>Fitness:</strong> colour-difference error in L*a*b* with normalised denominators. Tournament selection, uniform crossover, Gaussian mutation with adaptive std-dev.</p>
+          </div>
+          <div class="card">
+            <div class="card-title">Forward Model Modes</div>
+            <table class="w-full text-small">
+              <tr><th>Mode</th><th>Engine</th><th>When to Use</th></tr>
+              <tr><td><span class="tag tag-green">Surrogate</span></td><td>Analytical (Kubelka–Munk–style)</td><td>Quick scans, no external deps</td></tr>
+              <tr><td><span class="tag tag-orange">Realistic</span></td><td>MCML via PyXOpto (or MCX)</td><td>High-fidelity fits, production</td></tr>
+            </table>
+            <hr style="border-color: rgba(255,255,255,0.06); margin: 0.4rem 0;" />
+            <p class="text-xs op-6"><strong>Air–epidermis interface:</strong> PCA normal estimation from 3D surface mesh via <code>select_orient_tile_for_incidence.py</code> — ensures consistent incidence angles.</p>
+          </div>
+        </div>
+        <div class="card max-w-5xl mx-auto mt-3 text-xs">
+          <div class="flex items-center justify-center gap-3 flex-wrap">
+            <span class="tag tag-purple" style="font-size:0.6em;">Murilo port</span>
+            <span class="op-6">GA loop + forward-modelling ported from Murilo's skin-optics framework. Key differences: (1) integration with 3D label volumes, (2) dual forward-mode (surrogate + MCML), (3) direct L*a*b* targets with ITA° conversion.</span>
+          </div>
+          <hr style="border-color: rgba(255,255,255,0.06); margin: 0.3rem 0;" />
+          <div class="flex items-center justify-center gap-2 flex-wrap">
+            <span class="tag tag-blue" style="font-size:0.55em;">bridge</span>
+            <code class="op-6" style="font-size:0.65em;">build_histoseg_label_volume.py</code>
+            <span class="op-6" style="font-size:0.65em;">→</span>
+            <code class="op-6" style="font-size:0.65em;">label_to_optical_priors.py</code>
+            <span class="op-6" style="font-size:0.65em;">→</span>
+            <code class="op-6" style="font-size:0.65em;">run_optical_ga_from_labels.py</code>
+            <span class="op-6" style="font-size:0.65em;">→ .npy / .json / .npz</span>
+          </div>
+        </div>
+        <aside class="notes">
+          Emphasise the two forward modes — surrogate for rapid prototyping,
+          MCML-based for publication-grade fits. The GA is not a black box:
+          each genome can be visualised as reflectance curve + skin colour swatch.
+          The Murilo port saves ~80% re-implementation time.
+        </aside>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 9: MCX vs PyXOpto                                          -->
+      <!-- ================================================================ -->
+      <section id="mcx-vs-pyxopto" >
+        <h2>⚡ MCX vs PyXOpto</h2>
+        <p class="text-small op-6 mb-2">Light transport engine comparison — GPU Monte Carlo vs CPU MCML.</p>
+        <div class="card max-w-5xl mx-auto mt-1">
+          <table class="w-full">
+            <thead>
+              <tr>
+                <th>Property</th>
+                <th>MCX (Monte Carlo eXtreme)</th>
+                <th>PyXOpto (xopto)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Engine</strong></td>
+                <td>GPU-accelerated (CUDA C++)</td>
+                <td>CPU (Python + C extensions)</td>
+              </tr>
+              <tr>
+                <td><strong>Input format</strong></td>
+                <td>Binary voxel volume + JSON config</td>
+                <td>Python API, layered geometry</td>
+              </tr>
+              <tr>
+                <td><strong>Speed</strong></td>
+                <td>~10³–10⁴× faster at scale</td>
+                <td>Adequate for single 1D fits</td>
+              </tr>
+              <tr>
+                <td><strong>Output</strong></td>
+                <td>Fluence / absorption volume (.nii/.npy)</td>
+                <td>Reflectance / transmittance curves</td>
+              </tr>
+              <tr>
+                <td><strong>Pipeline role</strong></td>
+                <td><code>mcx_build_volume.py</code> → <code>mcx_batch_runner.py</code></td>
+                <td><code>mc_wrapper.py</code> in GA forward model</td>
+              </tr>
+              <tr>
+                <td><strong>Status</strong></td>
+                <td><span class="tag tag-yellow">scaffolded, batch compare ready</span></td>
+                <td><span class="tag tag-green">integrated, production use</span></td>
+              </tr>
+              <tr>
+                <td><strong>Strengths</strong></td>
+                <td>High-res 3D volumes, batch studies, GPU scaling</td>
+                <td>Zero GPU dep, easy debugging, pip-installable</td>
+              </tr>
+              <tr>
+                <td><strong>Limitations</strong></td>
+                <td>Binary volume conversion step, CUDA-only</td>
+                <td>Slower for voxelised 3D, single-threaded</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <!-- Why MCX is strategic -->
+        <div class="card max-w-5xl mx-auto mt-3 text-xs" style="border-color: rgba(139,233,253,0.15);">
+          <div class="card-title" style="color:#8be9fd;">Why MCX Is Strategic for Future 3D</div>
+          <div class="grid grid-cols-2 gap-3 text-xs">
+            <div>
+              <span class="tag tag-purple" style="font-size:0.6em;">scalable batch</span>
+              <span class="op-6">Sweep hundreds of optical-property realisations in minutes on a single GPU. Enables UQ and sensitivity analysis.</span>
+            </div>
+            <div>
+              <span class="tag tag-cyan" style="font-size:0.6em;">native 3D voxels</span>
+              <span class="op-6">Operates directly on the same .npy label volumes we already produce. No geometry abstraction gap.</span>
+            </div>
+            <div>
+              <span class="tag tag-pink" style="font-size:0.6em;">optical→thermal</span>
+              <span class="op-6">Exports per-voxel absorbed energy density (W/m³) — direct source term for Pennes solver. No resampling.</span>
+            </div>
+            <div>
+              <span class="tag tag-yellow" style="font-size:0.6em;">head-to-head</span>
+              <span class="op-6"><code>batch_compare</code> runs MCX + PyXOpto with shared bounds and identical tissue models for cross-validation.</span>
+            </div>
+          </div>
+        </div>
+        <aside class="notes">
+          MCX is not a drop-in replacement for PyXOpto — it requires a volume build step.
+          The batch-compare script is the key tool for trust calibration between the two
+          engines. Frame MCX as an investment: once the volume pipeline is solid, every
+          future study gets GPU-speed light transport for free.
+        </aside>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 10: THERMAL COUPLING — Optical Absorption → Bioheat        -->
+      <!-- ================================================================ -->
+      <section id="thermal-coupling" >
+        <h2>🌡️ Thermal Coupling — Pennes Bioheat</h2>
+        <p class="text-small op-6 mb-2">Optical absorption density Q(r) [W/m³] becomes the heat source in the Pennes equation.</p>
+        <div class="grid grid-cols-2 gap-4 max-w-5xl mx-auto mt-1">
+          <div class="card">
+            <div class="card-title">Pennes Bioheat Equation</div>
+            <p class="text-xs" style="font-family: 'Courier New', monospace; background: rgba(0,0,0,0.3); padding: 0.4rem; border-radius: 0.4rem; line-height: 1.5;">
+              ρ c ∂T/∂t = ∇·(k ∇T) + w<sub>b</sub> c<sub>b</sub> (T<sub>a</sub> − T) + Q<sub>met</sub> + Q(r)
+            </p>
+            <table class="w-full text-xs mt-2">
+              <tr><th>Symbol</th><th>Quantity</th><th>Units</th><th>Source</th></tr>
+              <tr><td>ρ</td><td>Density</td><td>kg/m³</td><td>label-dep</td></tr>
+              <tr><td>c</td><td>Specific heat</td><td>J/(kg·K)</td><td>label-dep</td></tr>
+              <tr><td>k</td><td>Conductivity</td><td>W/(m·K)</td><td>label-dep</td></tr>
+              <tr><td>w<sub>b</sub></td><td>Perfusion</td><td>s⁻¹</td><td>label-dep</td></tr>
+              <tr><td><strong>Q(r)</strong></td><td><strong>Optical absorption</strong></td><td><strong>W/m³</strong></td><td><strong>MCX output</strong></td></tr>
+            </table>
+          </div>
+          <div class="card">
+            <div class="card-title">Pipeline &amp; Configuration</div>
+            <ol class="list-decimal list-inside text-xs space-y-1">
+              <li>NIfTI volume → label volume (.npy)</li>
+              <li><code>thermal_build_model.py</code> → property arrays (ρ, c, k, w<sub>b</sub>, q<sub>met</sub>)</li>
+              <li><code>thermal_solve.py</code> → explicit FD Pennes solver</li>
+              <li><code>thermal_visualise.py</code> → temperature PNG + summary JSON</li>
+            </ol>
+            <hr style="border-color: rgba(255,255,255,0.06); margin: 0.4rem 0;" />
+            <p class="text-xs op-6">
+              <strong>Config:</strong> initial 37 °C · fixed / convective BC · source modes: <span class="tag tag-blue" style="font-size:0.55em;">none</span> <span class="tag tag-blue" style="font-size:0.55em;">spherical</span> <span class="tag tag-yellow" style="font-size:0.55em;">optical (future)</span>
+            </p>
+          </div>
+        </div>
+        <!-- Key coupling insight -->
+        <div class="card max-w-5xl mx-auto mt-3 text-xs" style="border-color: rgba(80,250,123,0.15);">
+          <div class="card-title" style="color:#50fa7b;">Key Coupling Insight</div>
+          <p class="op-6">The optical absorption field Q(r) is the <em>only</em> channel through which tissue microstructure enters the thermal model:</p>
+          <ol class="list-decimal list-inside op-6 mt-1 space-y-0.5">
+            <li>Inpainting quality directly affects the thermal source term.</li>
+            <li>The same label-to-property mapping used for optical priors is reused for thermal — no separate segmentation needed.</li>
+            <li>Sensitivity of the thermal field to inpainting artefacts can be quantified via perturbed-Q runs.</li>
+          </ol>
+          <p class="op-6 mt-1"><span class="tag tag-green" style="font-size:0.55em;">implemented</span> All three thermal scripts exist. Smoke tests run without GPU.</p>
+        </div>
+        <aside class="notes">
+          The optical absorption field Q(r) from MCX is a 3D array with the same voxel
+          grid as the NIfTI volume — no resampling. The coupling insight is that
+          the same label-to-property mapping serves both optical and thermal models.
+          Future: couple thermal back to optical via temperature-dependent chromophore spectra.
+        </aside>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 11: SYNTHETIC INPAINTING ROADMAP                           -->
+      <!-- ================================================================ -->
+      <section id="synthetic-roadmap" >
+        <h2>🗺️ Synthetic Inpainting Roadmap</h2>
+        <p class="text-small op-6 mb-2">From 2D tiles → 3D coherent volumes → multi-physics simulation.</p>
+        <div class="card max-w-5xl mx-auto mt-1">
+          <table class="w-full">
+            <thead>
+              <tr>
+                <th>Phase</th>
+                <th>Label</th>
+                <th>Status</th>
+                <th>Key Components</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="tag tag-green" style="font-size:0.6em;">A</span></td>
+                <td>Quick Win — 3D Scaffold</td>
+                <td><span class="tag tag-green" style="font-size:0.55em;">✅ Complete</span></td>
+                <td style="font-size:0.7em;">Cylindrical mask propagation · NIfTI stacking · Z-coherence metrics. Self-contained, no model required.</td>
+              </tr>
+              <tr>
+                <td><span class="tag tag-yellow" style="font-size:0.6em;">B</span></td>
+                <td>Volume Inpainting</td>
+                <td><span class="tag tag-yellow" style="font-size:0.55em;">🟡 In Progress</span></td>
+                <td style="font-size:0.7em;">Smoke test images · CSV adapter · 8-step orchestrator: mask → pairs → extract → inpaint → merge → stack → coherence → manifest</td>
+              </tr>
+              <tr>
+                <td><span class="tag tag-cyan" style="font-size:0.6em;">B.1</span></td>
+                <td>Tile-First High-Res <em>(preferred)</em></td>
+                <td><span class="tag tag-yellow" style="font-size:0.55em;">🟡 In Progress</span></td>
+                <td style="font-size:0.7em;">Strict bbox · tissue-aware mask · ROI patch extraction @ full res · inpaint @ model res · merge back. DVC: <code>run_3d_volume_inpaint_tile_smoke</code></td>
+              </tr>
+              <tr>
+                <td><span class="tag tag-orange" style="font-size:0.6em;">C</span></td>
+                <td>Multi-Physics Bridge</td>
+                <td><span class="tag tag-yellow" style="font-size:0.55em;">🟡 Scaffolded</span></td>
+                <td style="font-size:0.7em;">MCX volume builder + batch runner · optical GA (surrogate/realistic) · Pennes thermal solver. Smoke tests pass; end-to-end validation pending.</td>
+              </tr>
+              <tr>
+                <td><span class="tag tag-red" style="font-size:0.6em;">D</span></td>
+                <td>Advanced Z + Semantics</td>
+                <td><span class="tag tag-red" style="font-size:0.55em;">🔴 Future</span></td>
+                <td style="font-size:0.7em;">Affine mask warping (relaxed cylinders) · Z-smoothness reward in LoRA · YOLO tissue detector · multi-class conditional inpainting</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <!-- Key design decisions -->
+        <div class="grid grid-cols-2 gap-4 max-w-5xl mx-auto mt-3 text-xs">
+          <div class="card" style="border-color: rgba(139,233,253,0.15);">
+            <div class="card-title" style="color:#8be9fd;">Conservative Claims</div>
+            <ul class="list-disc list-inside op-6 space-y-0.5" style="font-size:0.7em;">
+              <li>Cylindrical masks = deliberate simplification. Zero added diffusion complexity. Z-coherence measured, not enforced.</li>
+              <li>Tile-first strictly preferred over full-slice resize. Preserves tissue architecture outside edit region.</li>
+              <li>HR source guardrails explicit: pipeline validates manifest paths are truly sequential.</li>
+              <li>No large dataset downloads: Histo-Seg + optional Zenodo only.</li>
+            </ul>
+          </div>
+          <div class="card" style="border-color: rgba(255,184,108,0.15);">
+            <div class="card-title" style="color:#ffb86c;">Current Focus</div>
+            <ul class="list-disc list-inside op-6 space-y-0.5" style="font-size:0.7em;">
+              <li>Phase B.1 tile-first flow with strict bbox mode</li>
+              <li>Real inpainting pass with trained LoRA on slice stack</li>
+              <li>MCX vs PyXOpto batch comparison</li>
+              <li>HR source provenance logging in QC plots</li>
+            </ul>
+          </div>
+        </div>
+        <aside class="notes">
+          Phase A is done. Phase B is the current focus — the tile-first B.1 sub-flow
+          is preferred because it preserves full-resolution tissue architecture.
+          Phase C bridges to physics. Phase D is future work. The roadmap is
+          deliberately incremental: each phase adds capability without breaking
+          the mask-agnostic pipeline design.
+        </aside>
+      </section>
+
+      <!-- ================================================================ -->
+      <!-- SLIDE 12: ROADMAP / OPEN QUESTIONS + HOW TO RUN THIS DECK        -->
+      <!-- ================================================================ -->
+      <section id="open-questions" >
+        <h2>❓ Roadmap &amp; Open Questions</h2>
+        <p class="text-small op-6 mb-2">Immediate milestones and long-term research directions.</p>
+
+        <!-- Milestones table -->
+        <div class="card max-w-5xl mx-auto mt-1" style="padding:0.4rem 0.8rem;">
+          <div class="card-title" style="font-size:0.6em; color:#ffb86c;">Immediate Milestones (Next 1–2 Cycles)</div>
+          <table class="w-full text-xs">
+            <thead>
+              <tr><th>#</th><th>Milestone</th><th>Dependencies</th><th>Acceptance</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>M1</td><td>Real LoRA inpainting pass on sequential HR stack</td><td>Trained LoRA, base SDXL, Zenodo stack</td><td>Inpainted NIfTI + Z-coherence + run manifest</td></tr>
+              <tr><td>M2</td><td>Z-coherence thresholding — auto-reject low-SSIM volumes</td><td>M1 output, threshold param</td><td>Rejection log + fallback slice selection</td></tr>
+              <tr><td>M3</td><td>Per-slice affine mask warping (relaxed cylinder)</td><td>M1, propagation script</td><td>Warped mask stack with configurable perturbation</td></tr>
+              <tr><td>M4</td><td>CIELAB ΔE* in QC output for merged patches</td><td>Merge script</td><td>ΔE* per patch + summary in QC JSON</td></tr>
+              <tr><td>M5</td><td>MCX vs PyXOpto batch comparison across N seeds</td><td>Batch compare script, shared bounds</td><td>Convergence scatter plot + summary table</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4 max-w-5xl mx-auto mt-3">
+          <div class="card">
+            <div class="card-title" style="color: #8be9fd; font-size:0.7em;">Open Research Questions</div>
+            <ol class="list-decimal list-inside text-xs op-6 space-y-1">
+              <li><strong>Semantic mask encoding.</strong> How to feed tissue-class info into inpainting? Concatenated channels? Conditioned cross-attention? Separate LoRA per class?</li>
+              <li><strong>Minimal Z-slice count.</strong> Is 10 slices enough to detect coherence degradation? 20? Does the metric saturate?</li>
+              <li><strong>Optical prior strategy.</strong> Per-label region (coarse) vs per-voxel (fine)? Coarse matches MCX input; fine may overfit.</li>
+              <li><strong>Validation against real histology.</strong> Compare inpainted tissue against H&E stain vectors (Macenko norm)? Does non-real stain colour matter for simulation?</li>
+              <li><strong>Cylindrical validity vs Z-spacing.</strong> For >5 μm between slices, does rigid cylinder assumption break down?</li>
+              <li><strong>Classifier reward generalisation.</strong> Does Phase 2/3 reward from Histo-Seg classifier hold for held-out tissue types?</li>
+            </ol>
+          </div>
+          <div class="card">
+            <div class="card-title" style="color: #50fa7b; font-size:0.7em;">Guiding Principles</div>
+            <ul class="list-disc list-inside text-xs space-y-2">
+              <li><span class="tag tag-cyan" style="font-size:0.55em;">mask-agnostic</span><br /><span class="op-6">Editing workflow does not depend on mask source. Better masks directly yield better results.</span></li>
+              <li><span class="tag tag-green" style="font-size:0.55em;">semantic-mask-as-GT</span><br /><span class="op-6">Long-term goal is class-aware masks, but pipeline works with binary masks today.</span></li>
+              <li><span class="tag tag-purple" style="font-size:0.55em;">provenanced intermediates</span><br /><span class="op-6">Every step logs inputs, parameters, outputs in run manifest. Enables retrospective QC.</span></li>
+            </ul>
+            <hr style="border-color: rgba(255,255,255,0.06); margin: 0.5rem 0;" />
+            <p class="text-xs op-6" style="font-size:0.55em;">
+              <strong>How to run this deck:</strong> Open <code>docs/slides/skin_histology_core_ideas.html</code> directly in any modern browser. No build step required.
+            </p>
+          </div>
+        </div>
+        <aside class="notes">
+          We have five near-term milestones that tighten the pipeline, and six open
+          research questions that guide our long-term direction. The biggest open
+          questions are around semantic encoding — how to feed tissue class info into
+          inpainting — and validation — how to know if an inpainted patch is
+          histologically realistic. Our three guiding principles keep the design robust.
+        </aside>
+      </section>
+
+    </div><!-- .slides -->
+  </div><!-- .reveal -->
+
+  <!-- ── Reveal.js scripts ── -->
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.3.1/dist/reveal.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.3.1/plugin/highlight/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.3.1/plugin/notes/notes.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@4.3.1/plugin/markdown/markdown.min.js"></script>
+
+  <script>
+    Reveal.initialize({
+      hash: true,
+      slideNumber: false,          // we use our own footer
+      transition: 'fade',
+      backgroundTransition: 'fade',
+      plugins: [ RevealHighlight, RevealNotes, RevealMarkdown ],
+      width: 1280,
+      height: 800,
+      margin: 0.02,
+      minScale: 0.2,
+      maxScale: 1.5,
+    });
+
+    // Update custom slide number on each slide change
+    Reveal.on('slidechanged', function(event) {
+      const num = document.getElementById('slide-num');
+      if (num) {
+        const indices = Reveal.getIndices();
+        num.textContent = indices.h + 1;
+      }
+    });
+
+    // Initial set
+    window.addEventListener('load', function() {
+      const num = document.getElementById('slide-num');
+      if (num) num.textContent = '1';
+    });
+  </script>
+
+</body>
+</html>

@@ -40,7 +40,20 @@ import re
 import numpy as np
 from PIL import Image
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.sequence_utils import (
+    SequenceValidationError,
+    collect_ordered_paths,
+    sequence_summary,
+    validate_contiguous_selection,
+)
+
 Image.MAX_IMAGE_PIXELS = None
+
+MIN_HIGH_RES_SIDE_PIXELS = 1024
 
 
 def _check_python() -> str:
@@ -50,28 +63,39 @@ def _check_python() -> str:
 
 def _resolve_common_parent(glob_pattern: str) -> Path:
     """Get the common parent directory from the first glob match."""
-    files = sorted(_glob.glob(glob_pattern))
-    if not files:
-        raise SystemExit(f"No files match glob: {glob_pattern}")
+    files = _collect_slice_files(glob_pattern)
     return Path(files[0]).resolve().parent
 
 
 def _infer_slice_shape(glob_pattern: str) -> tuple[int, int]:
     """Infer (height, width) from first slice image matched by glob."""
-    files = sorted(_glob.glob(glob_pattern))
-    if not files:
-        raise SystemExit(f"No files match glob: {glob_pattern}")
+    files = _collect_slice_files(glob_pattern)
     img = Image.open(files[0])
     w, h = img.size
     return h, w
 
 
+def _slice_image_sizes(slice_files: list[str], limit: int | None = None) -> dict[tuple[int, int], list[str]]:
+    """Return image-size groups as (width, height) -> filenames."""
+    groups: dict[tuple[int, int], list[str]] = {}
+    selected = slice_files if limit is None else slice_files[:limit]
+    for slice_file in selected:
+        with Image.open(slice_file) as img:
+            groups.setdefault(img.size, []).append(Path(slice_file).name)
+    return groups
+
+
 def _collect_slice_files(glob_pattern: str) -> list[str]:
-    """Return sorted list of slice file paths matching glob."""
-    files = sorted(_glob.glob(glob_pattern))
-    if not files:
-        raise SystemExit(f"No files match glob pattern: {glob_pattern}")
-    return files
+    """Return naturally ordered, contiguous slice file paths matching glob."""
+    try:
+        files = collect_ordered_paths(glob_pattern)
+        validate_contiguous_selection(files, context=f"slice glob {glob_pattern!r}")
+    except SequenceValidationError as exc:
+        raise SystemExit(
+            f"Invalid slice sequence: {exc}\n"
+            "Use an unfiltered source glob and select contiguous slices from that order."
+        )
+    return [str(p) for p in files]
 
 
 def _make_circular_mask(
@@ -761,7 +785,8 @@ def _step_build_pairs_csv(
 
     Returns path to the pairs CSV.
     """
-    slice_files = _collect_slice_files(args.slice_glob)
+    all_slice_files = _collect_slice_files(args.slice_glob)
+    slice_files = all_slice_files[:args.num_slices]
     mask_dir = run_dir / "masks"
     mask_files = sorted(mask_dir.glob("mask_slice_*.png"))
 
@@ -808,6 +833,8 @@ def _step_build_pairs_csv(
     step_log["mask_dir"] = str(mask_dir)
     step_log["num_pairs"] = num_pairs
     step_log["pairing_method"] = "index_token"
+    step_log["source_sequence"] = sequence_summary(all_slice_files)
+    step_log["selected_sequence"] = sequence_summary(slice_files)
     print(f"[Step 2] Wrote pairs CSV: {pairs_csv} ({num_pairs} slice/mask pairs via index-token matching)")
     print(f"  image_dir: {image_dir}")
     print(f"  mask_dir:  {mask_dir}")
@@ -1337,8 +1364,8 @@ def main() -> None:
     ap.add_argument(
         "--slice-glob", required=True,
         help=(
-            'Glob pattern for ordered slice images, e.g. '
-            '"slices/volume_*/slice_*.png".'
+            'Glob pattern for ordered high-resolution slice images, e.g. '
+            '"data/benchmarks/melanoma_3d/original_hr_prepped_tl/slice_*.png".'
         ),
     )
     ap.add_argument(
@@ -1551,6 +1578,14 @@ def main() -> None:
         "--no-merge", action="store_true",
         help="Stop after inpainting (skip merge, stack, and coherence).",
     )
+    ap.add_argument(
+        "--allow-lowres-slices", action="store_true",
+        help=(
+            "Allow non-dry-run execution on source slices with a side smaller "
+            f"than {MIN_HIGH_RES_SIDE_PIXELS}px. Default blocks legacy low-res "
+            "melanoma slices so tile inpainting is generated from HR images."
+        ),
+    )
 
     args = ap.parse_args()
 
@@ -1587,12 +1622,8 @@ def main() -> None:
     if args.min_z_gradient_smoothness is not None and args.min_z_gradient_smoothness < 0:
         ap.error("--min-z-gradient-smoothness must be >= 0")
 
-    # --- Setup run directory ---
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    run_dir = Path(args.output_dir) / f"{args.volume_id}_{timestamp}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    # Detect slice dimensions for display
+    # Detect slice dimensions before creating a run directory so accidental
+    # low-res real inpainting fails early. Dry-run smoke tests remain allowed.
     display_h = args.slice_height
     display_w = args.slice_width
     if display_h == 0 or display_w == 0:
@@ -1600,6 +1631,44 @@ def main() -> None:
             display_h, display_w = _infer_slice_shape(args.slice_glob)
         except Exception:
             pass
+
+    if (
+        not args.dry_run
+        and not args.allow_lowres_slices
+        and display_h
+        and display_w
+        and min(display_h, display_w) < MIN_HIGH_RES_SIDE_PIXELS
+    ):
+        ap.error(
+            "Refusing non-dry-run tile inpainting on low-resolution slices "
+            f"({display_h}x{display_w}). Use the HR source glob, e.g. "
+            "data/benchmarks/melanoma_3d/original_hr_prepped_tl/slice_*.png. "
+            "Pass --allow-lowres-slices only for explicit legacy/debug runs."
+        )
+
+    source_slice_files = _collect_slice_files(args.slice_glob)
+    source_slice_count = len(source_slice_files)
+    if source_slice_count < args.num_slices:
+        ap.error(
+            f"--num-slices ({args.num_slices}) exceeds contiguous source slice count "
+            f"({source_slice_count}) for --slice-glob."
+        )
+
+    size_groups = _slice_image_sizes(source_slice_files, limit=args.num_slices)
+    if len(size_groups) > 1:
+        examples = "; ".join(
+            f"{width}x{height}: {names[0]}" for (width, height), names in list(size_groups.items())[:5]
+        )
+        ap.error(
+            "Selected slices do not share one fixed canvas size. "
+            "Build a fixed-canvas stack first with scripts/3d/build_sequential_slice_stack.py. "
+            f"Observed sizes: {examples}"
+        )
+
+    # --- Setup run directory ---
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_dir = Path(args.output_dir) / f"{args.volume_id}_{timestamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 64)
     print("Tile-First Volume Inpainting Pipeline")
@@ -1624,7 +1693,7 @@ def main() -> None:
 
     manifest: dict[str, Any] = {
         "pipeline": "run_volume_inpaint_pipeline",
-        "version": "2.3.0",
+        "version": "2.3.1",
         "description": "Tile-first volume inpainting (patch-based, no full-slice resize)",
         "volume_id": args.volume_id,
         "timestamp_utc": timestamp,

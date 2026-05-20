@@ -21,23 +21,23 @@ Slice order is determined by natural sort of the glob expansion or CSV row order
 from __future__ import annotations
 
 import argparse
-import glob
 import os
-import re
 import sys
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-def _natural_sort_key(path: str) -> list:
-    """Human-friendly sort: 'slice_2' before 'slice_10'."""
-    return [
-        int(text) if text.isdigit() else text.lower()
-        for text in re.split(r"(\d+)", path)
-    ]
+from src.sequence_utils import (
+    SequenceValidationError,
+    collect_ordered_paths,
+    validate_contiguous_selection,
+)
 
 
 def _gather_slice_paths(
-    slice_glob: str | None, slice_csv: str | None
+    slice_glob: str | None, slice_csv: str | None, allow_noncontiguous: bool = False
 ) -> list[str]:
     """Return sorted list of slice image file paths."""
     if slice_csv:
@@ -49,12 +49,17 @@ def _gather_slice_paths(
         paths = df[col].dropna().tolist()
         # Preserve CSV row order (user-defined ordering)
     elif slice_glob:
-        paths = sorted(glob.glob(slice_glob), key=_natural_sort_key)
+        paths = [str(p) for p in collect_ordered_paths(slice_glob)]
     else:
         raise SystemExit("Provide one of --slice-glob or --slice-csv.")
 
     if not paths:
         raise SystemExit("No slice images matched the given pattern / CSV.")
+    if not allow_noncontiguous:
+        try:
+            validate_contiguous_selection(paths, context="metadata slice input")
+        except SequenceValidationError as exc:
+            raise SystemExit(f"Invalid slice sequence: {exc}")
     return paths
 
 
@@ -117,6 +122,11 @@ def main() -> None:
         "--output-csv", required=True,
         help="Output metadata CSV path.",
     )
+    ap.add_argument(
+        "--allow-noncontiguous-slices",
+        action="store_true",
+        help="Debug escape hatch. By default, input slices must be contiguous.",
+    )
     args = ap.parse_args()
 
     if not args.slice_glob and not args.slice_csv:
@@ -125,7 +135,7 @@ def main() -> None:
         ap.error("Provide only one of --slice-glob or --slice-csv (not both).")
 
     # --- Gather slice paths ---
-    slice_paths = _gather_slice_paths(args.slice_glob, args.slice_csv)
+    slice_paths = _gather_slice_paths(args.slice_glob, args.slice_csv, args.allow_noncontiguous_slices)
     print(f"Found {len(slice_paths)} slice images.")
 
     # --- Resolve mask paths ---
