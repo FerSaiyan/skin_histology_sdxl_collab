@@ -19,8 +19,10 @@ MCX/PyXOpto/thermal workflows can consume the same aligned tile set.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as cf
 import csv
 import json
+import os
 import sys
 import warnings
 from dataclasses import dataclass
@@ -29,6 +31,9 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
+
+Image.MAX_IMAGE_PIXELS = None
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[2])
 if _REPO_ROOT not in sys.path:
@@ -527,6 +532,12 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("--min-normal-confidence", type=float, default=0.55)
     ap.add_argument("--max-tiles-per-image", type=int, default=0)
     ap.add_argument("--max-total-tiles", type=int, default=0)
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="Number of worker processes. 0=auto, 1=single-process.",
+    )
     return ap.parse_args(argv[1:])
 
 
@@ -558,30 +569,59 @@ def main(argv: List[str]) -> int:
     all_manifest_rows: List[Dict[str, object]] = []
     per_image_stats: Dict[str, Dict[str, int]] = {}
 
-    for i, row in enumerate(rows):
-        img_path = Path(row["image_path"])
-        slide_key = img_path.stem
-        mrows, st = _process_pair(
-            row=row,
-            csv_parent=pairs_csv.parent,
-            out_root=out_root,
-            tile_size=int(args.tile_size),
-            stride=int(args.stride),
-            filters=filters,
-            max_tiles_per_image=int(args.max_tiles_per_image),
-        )
+    workers = int(args.workers)
+    if workers <= 0:
+        workers = max(1, min(8, os.cpu_count() or 1))
 
+    tile_size = int(args.tile_size)
+    stride = int(args.stride)
+    max_tiles_per_image = int(args.max_tiles_per_image)
+
+    def _consume_result(row_obj: Dict[str, str], mrows: List[Dict[str, object]], st: Dict[str, int]) -> None:
+        img_path = Path(row_obj["image_path"])
+        slide_key = img_path.stem
         per_image_stats[slide_key] = st
         all_manifest_rows.extend(mrows)
 
-        print(
-            f"[{i + 1}/{len(rows)}] {slide_key}: "
-            f"candidates={st['num_candidates']} keep={st['num_keep']}"
-        )
+    if workers == 1:
+        for row in tqdm(rows, total=len(rows), desc="Slides", unit="slide"):
+            mrows, st = _process_pair(
+                row=row,
+                csv_parent=pairs_csv.parent,
+                out_root=out_root,
+                tile_size=tile_size,
+                stride=stride,
+                filters=filters,
+                max_tiles_per_image=max_tiles_per_image,
+            )
+            _consume_result(row, mrows, st)
+    else:
+        future_to_row: Dict[cf.Future, Dict[str, str]] = {}
+        with cf.ProcessPoolExecutor(max_workers=workers) as ex:
+            for row in rows:
+                fut = ex.submit(
+                    _process_pair,
+                    row,
+                    pairs_csv.parent,
+                    out_root,
+                    tile_size,
+                    stride,
+                    filters,
+                    max_tiles_per_image,
+                )
+                future_to_row[fut] = row
 
-        if args.max_total_tiles > 0 and len(all_manifest_rows) >= int(args.max_total_tiles):
-            all_manifest_rows = all_manifest_rows[: int(args.max_total_tiles)]
-            break
+            pbar = tqdm(total=len(rows), desc=f"Slides ({workers} workers)", unit="slide")
+            for fut in cf.as_completed(future_to_row):
+                row = future_to_row[fut]
+                mrows, st = fut.result()
+                _consume_result(row, mrows, st)
+                pbar.update(1)
+                pbar.set_postfix({"tiles": len(all_manifest_rows)})
+            pbar.close()
+
+    if args.max_total_tiles > 0 and len(all_manifest_rows) >= int(args.max_total_tiles):
+        all_manifest_rows = all_manifest_rows[: int(args.max_total_tiles)]
 
     _write_manifest(all_manifest_rows, manifest_csv)
 

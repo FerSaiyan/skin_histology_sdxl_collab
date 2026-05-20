@@ -93,6 +93,7 @@ simulation_tiles:
   min_normal_confidence: 0.55
   max_tiles_per_image: 0
   max_total_tiles: 0
+  workers: 0
 
 # =============================================================================
 # MURILO'S PC — Tile orientation (epidermis-air interface alignment)

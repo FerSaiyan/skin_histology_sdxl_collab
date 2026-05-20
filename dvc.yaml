@@ -48,7 +48,7 @@ stages:
 # ===========================================================================
 
   build_tiles_for_simulation_dataset:
-    cmd: python scripts/optical_ga/build_tiles_for_simulation.py --pairs-csv data/processed/histoseg_pairs.csv --output-dir data/artifacts/tiles_for_simulation --manifest-csv data/artifacts/tiles_for_simulation/tiles_manifest.csv --stats-json data/artifacts/tiles_for_simulation/tiles_stats.json --tile-size 512 --stride 256 --min-tissue-frac 0.25 --max-tissue-frac 0.98 --min-epidermis-frac 0.02 --min-air-epidermis-interface-px 64 --min-normal-confidence 0.55 --max-tiles-per-image 0 --max-total-tiles 0
+    cmd: python scripts/optical_ga/build_tiles_for_simulation.py --pairs-csv data/processed/histoseg_pairs.csv --output-dir data/artifacts/tiles_for_simulation --manifest-csv data/artifacts/tiles_for_simulation/tiles_manifest.csv --stats-json data/artifacts/tiles_for_simulation/tiles_stats.json --tile-size 512 --stride 256 --min-tissue-frac 0.25 --max-tissue-frac 0.98 --min-epidermis-frac 0.02 --min-air-epidermis-interface-px 64 --min-normal-confidence 0.55 --max-tiles-per-image 0 --max-total-tiles 0 --workers 0
     deps:
       - scripts/optical_ga/build_tiles_for_simulation.py
       - scripts/optical_ga/estimate_epidermis_normal.py
@@ -84,6 +84,7 @@ stages:
       - simulation_tiles.min_normal_confidence
       - simulation_tiles.max_tiles_per_image
       - simulation_tiles.max_total_tiles
+      - simulation_tiles.workers
 
 # ===========================================================================
 # AKIO'S PC — SDXL LoRA config rendering + training (user's machine)
