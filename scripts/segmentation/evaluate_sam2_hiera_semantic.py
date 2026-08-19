@@ -18,40 +18,29 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
-from histoseg_tile_dataset import (  # noqa: E402
-    CLASS_NAME_BY_ID,
-    HistosegSimulationTileDataset,
-)
+from histoseg_tile_dataset import CLASS_NAME_BY_ID, HistosegSimulationTileDataset  # noqa: E402
 from sam2_hiera_semantic import SAM2HieraSemanticSegmenter  # noqa: E402
 from segmentation_metrics import metrics_from_confusion, update_confusion_matrix  # noqa: E402
 
 CLASS_ID_TO_COLOR = {
-    0: (0, 0, 0),
-    1: (224, 224, 224),
-    2: (96, 96, 96),
-    3: (150, 150, 0),
-    4: (127, 255, 255),
-    5: (255, 156, 0),
-    6: (255, 0, 255),
-    7: (0, 255, 0),
-    8: (0, 156, 255),
-    9: (127, 96, 255),
-    10: (112, 48, 160),
-    11: (0, 0, 128),
+    0: (0, 0, 0), 1: (224, 224, 224), 2: (96, 96, 96), 3: (150, 150, 0),
+    4: (127, 255, 255), 5: (255, 156, 0), 6: (255, 0, 255), 7: (0, 255, 0),
+    8: (0, 156, 255), 9: (127, 96, 255), 10: (112, 48, 160), 11: (0, 0, 128),
 }
 
 
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--checkpoint", required=True, help="best.pt or last.pt from training")
+    ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--split", default="test", choices=["train", "val", "test"])
-    ap.add_argument("--tiles-root", default="", help="Override path stored in checkpoint config")
-    ap.add_argument("--splits-csv", default="", help="Override path stored in checkpoint config")
-    ap.add_argument("--output-dir", default="", help="Default: <checkpoint-dir>/eval_<split>")
+    ap.add_argument("--tiles-root", default="")
+    ap.add_argument("--splits-csv", default="")
+    ap.add_argument("--output-dir", default="")
     ap.add_argument("--batch-size", type=int, default=1)
     ap.add_argument("--num-workers", type=int, default=4)
-    ap.add_argument("--device", default="auto", help="auto|cuda|cpu")
-    ap.add_argument("--max-batches", type=int, default=0, help="0=all")
+    ap.add_argument("--device", default="auto")
+    ap.add_argument("--max-batches", type=int, default=0)
+    ap.add_argument("--supported-min-gt-pixels", type=int, default=-1)
     ap.add_argument("--save-predictions", action="store_true")
     return ap.parse_args()
 
@@ -78,9 +67,6 @@ def main() -> int:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     model_kwargs = dict(checkpoint["model_kwargs"])
     num_classes = int(model_kwargs.get("num_classes", 12))
-
-    # Recreate only the SAM2 architecture; our checkpoint supplies the trained
-    # encoder + decoder weights, so there is no need to re-download Meta weights.
     model = SAM2HieraSemanticSegmenter(
         num_classes=num_classes,
         sam2_config=str(model_kwargs["sam2_config"]),
@@ -93,35 +79,30 @@ def main() -> int:
 
     training_config = dict(checkpoint.get("training_config", {}))
     data_cfg = dict(training_config.get("data", {}))
+    metrics_cfg = dict(training_config.get("metrics", {}))
     tiles_root = args.tiles_root or data_cfg.get("tiles_root")
     splits_csv = args.splits_csv or data_cfg.get("splits_csv")
     if not tiles_root or not splits_csv:
         raise SystemExit("tiles_root/splits_csv missing; pass CLI overrides")
+    supported_min_gt_pixels = (
+        int(args.supported_min_gt_pixels)
+        if int(args.supported_min_gt_pixels) >= 0
+        else int(metrics_cfg.get("supported_min_gt_pixels", 1024))
+    )
 
     encoder_size = int(checkpoint.get("encoder_input_size", model.encoder_input_size))
     dataset = HistosegSimulationTileDataset(
-        tiles_root=tiles_root,
-        splits_csv=splits_csv,
-        split=args.split,
-        encoder_size=encoder_size,
-        augment=False,
+        tiles_root=tiles_root, splits_csv=splits_csv, split=args.split,
+        encoder_size=encoder_size, augment=False,
     )
     device = _device(args.device)
     model = model.to(device).eval()
     loader = DataLoader(
-        dataset,
-        batch_size=int(args.batch_size),
-        shuffle=False,
-        num_workers=int(args.num_workers),
-        pin_memory=device.type == "cuda",
-        persistent_workers=int(args.num_workers) > 0,
+        dataset, batch_size=int(args.batch_size), shuffle=False, num_workers=int(args.num_workers),
+        pin_memory=device.type == "cuda", persistent_workers=int(args.num_workers) > 0,
     )
 
-    output_dir = (
-        Path(args.output_dir).resolve()
-        if args.output_dir
-        else checkpoint_path.parent / f"eval_{args.split}"
-    )
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else checkpoint_path.parent / f"eval_{args.split}"
     output_dir.mkdir(parents=True, exist_ok=True)
     pred_dir = output_dir / "predictions"
     vis_dir = output_dir / "predictions_vis"
@@ -144,7 +125,6 @@ def main() -> int:
             ):
                 logits = model(images, output_size=(int(labels.shape[-2]), int(labels.shape[-1])))
             update_confusion_matrix(confusion, logits, labels, num_classes=num_classes)
-
             if args.save_predictions:
                 pred = torch.argmax(logits, dim=1).cpu().numpy().astype(np.uint8)
                 for i, tile_id in enumerate(batch["tile_id"]):
@@ -152,22 +132,30 @@ def main() -> int:
                     Image.fromarray(_label_vis(pred[i])).save(vis_dir / f"{tile_id}.png")
             seen += int(images.shape[0])
 
-    metrics = metrics_from_confusion(confusion, exclude_background_from_macro=True)
+    metrics = metrics_from_confusion(
+        confusion,
+        exclude_background_from_macro=True,
+        supported_min_gt_pixels=supported_min_gt_pixels,
+    )
     metrics["split"] = args.split
     metrics["tiles_evaluated"] = seen
     metrics["checkpoint"] = str(checkpoint_path)
     metrics["class_names"] = {str(k): v for k, v in CLASS_NAME_BY_ID.items()}
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
-    print(f"Tiles evaluated: {seen}")
-    print(f"Macro Dice     : {metrics['macro_dice']:.4f}")
-    print(f"Macro IoU      : {metrics['macro_iou']:.4f}")
+    print(f"Tiles evaluated       : {seen}")
+    print(f"Macro Dice (present)  : {metrics['macro_dice_present']:.4f}")
+    print(f"Macro Dice (fixed 11) : {metrics['macro_dice_fixed']:.4f}")
+    print(f"Macro Dice (supported): {metrics['macro_dice_supported']:.4f}")
+    print(f"Macro IoU (present)   : {metrics['macro_iou']:.4f}")
+    print(f"Pixel accuracy        : {metrics['pixel_accuracy']:.4f}")
+    print(f"Supported class IDs   : {metrics['supported_class_ids']}")
     for cid in range(num_classes):
         cls = metrics["per_class"][str(cid)]
         dice = cls["dice"]
         print(
             f"  {cid:2d} {CLASS_NAME_BY_ID.get(cid, f'class_{cid}'):<28} "
-            f"Dice={'n/a' if dice is None else f'{dice:.4f}'}"
+            f"Dice={'n/a' if dice is None else f'{dice:.4f}'} GT={cls['gt_pixels']} Pred={cls['pred_pixels']}"
         )
     print(f"Metrics: {output_dir / 'metrics.json'}")
     return 0
