@@ -4,6 +4,25 @@ outputs/
 mlruns/
 logs/
 
+# Local model weights and experiment checkpoints
+checkpoints/
+runs/
+wandb/
+tensorboard/
+*.ckpt
+*.safetensors
+*.pth
+*.pt
+*.bin
+*.onnx
+
+# Downloaded dataset and model archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+
 # Comparison pipeline artifacts
 data/artifacts/compare_phase*/
 outputs/finetunes/**/run10/

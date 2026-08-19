@@ -202,8 +202,39 @@ python scripts/patches/materialize_tile_dataset.py \
 # Generate random masks
 python scripts/patches/generate_random_tile_masks.py \
   --image-dir data/artifacts/tiles/materialized_512 \
-  --output-dir data/artifacts/tiles/masks_random_512
+  --output-dir data/artifacts/tiles/masks_random_512 \
+  --workers 20 --seed 222 \
+  --white-threshold 235 --tissue-min-overlap 0.75 \
+  --max-attempts 20 --min-area-frac 0.08 --max-area-frac 0.22 \
+  --min-strokes 1 --max-strokes 4 --min-vertices 3 --max-vertices 8 \
+  --min-brush-px 24 --max-brush-px 128 \
+  --feather-radius 2.0 --mask-strength 1.0 --overwrite \
+  --stats-json data/artifacts/tiles/masks_random_512_stats.json
 ```
+
+## Phase Behavior Notes (from oral-lesions comparison)
+
+- `Phase 1` (foundation) learns base inpainting behavior and histology texture adaptation under masked loss.
+- `Phase 2` (reward-guided) iteratively trains and selects checkpoints, usually improving realism and class-conditioned edits.
+- `Phase 3` (morph reward) applies the strongest curriculum pressure and can make edits look exaggerated if tuned too aggressively.
+
+Observed differences versus the oral-lesions notebook overrides:
+- Oral Grad-CAM runs used longer Phase 1 training with ROI masks and inpaint sample controls.
+- Short Phase 1 tile runs can converge to color-fill behavior inside masks before learning tissue microtexture.
+- Phase 2 was generally the strongest optimization stage; Phase 3 should be used sparingly when outputs become over-strong.
+
+Recommended tuning order for skin histology:
+- Increase Phase 1 duration before adding stronger reward pressure.
+- Prefer smaller or local masks for early runs to force tissue-structure learning.
+- Keep representative image/mask pairs for inpaint previews.
+
+## Remote H&E Tile Run
+
+The remote H&E tile configs use the tuned round-blob masks and multi-case preview selection:
+- `configs/sdxl_lora_phase1_collab_hes_tiles_randommask_w220_remote.yaml` resumes the remote phase-1 run.
+- `configs/sdxl_lora_phase1_collab_hes_tiles_randommask_w220_warmstart_remote.yaml` warm-starts from the standard tile checkpoint.
+- `scripts/synthetic_data/generate_lora_inpaint_tile_samples.py` generates per-tile samples across LoRA scales.
+- Dataset tiles, masks, checkpoints, and generated samples remain local under gitignored directories.
 
 Phase configs: `configs/sdxl_lora_phase*_skin_histology_tiles_randommask.yaml`
 

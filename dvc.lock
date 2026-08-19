@@ -379,3 +379,38 @@ stages:
       md5: 2226039fcd3ee978abc2d80a48d263df.dir
       size: 77128
       nfiles: 17
+  train_skin_lora_phase1:
+    cmd: python scripts/synthetic_data/finetune_stable_diffusion_unified.py
+      --config configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml
+    deps:
+    - path: configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml
+      hash: md5
+      md5: 75d30ca8f3fc7a45032aad0aee338846
+      size: 2214
+    - path: data/artifacts/roi_masks/histoseg_pairs
+      hash: md5
+      md5: 5c7e23d341290637a327e5bf1ee10639.dir
+      size: 91374187
+      nfiles: 77
+    - path: data/metadata/runtime_config_sync.json
+      hash: md5
+      md5: c2d0bf92d4530743c3efdfc4dcda0b22
+      size: 810
+    - path: params.yaml
+      hash: md5
+      md5: 13ccb2b46358db7b49394151eaeadb69
+      size: 6699
+    - path: scripts/synthetic_data/finetune_stable_diffusion_unified.py
+      hash: md5
+      md5: dba879dac5d794f6cbc8bafb1a226b49
+      size: 69900
+    params:
+      params.yaml:
+        pipeline.phase1_runtime:
+          configs/runtime/sdxl_lora_phase1_skin_histology.runtime.yaml
+    outs:
+    - path: outputs/finetunes/skin_histology_phase1
+      hash: md5
+      md5: 8de49cf2ea137d923780d169c5d7f659.dir
+      size: 858392086
+      nfiles: 23
