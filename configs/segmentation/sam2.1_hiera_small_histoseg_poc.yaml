@@ -1,0 +1,47 @@
+# Proof of concept: 12-class semantic segmentation on tiles_for_simulation.
+# SAM2.1 Hiera Small is used only as the pretrained image encoder; the prompt
+# encoder/mask decoder are replaced by a small dense semantic FPN head.
+
+data:
+  tiles_root: data/artifacts/tiles_for_simulation
+  splits_csv: data/artifacts/tiles_for_simulation/segmentation_splits.csv
+  train_split: train
+  val_split: val
+  # Kept here for readability. The trainer uses the official SAM2 model's
+  # image_size (1024 for SAM2.1) if this differs.
+  encoder_size: 1024
+
+model:
+  num_classes: 12
+  sam2_model_id: facebook/sam2.1-hiera-small
+  sam2_config: configs/sam2.1/sam2.1_hiera_s.yaml
+  # Optional local official checkpoint. If null, the first run downloads the
+  # checkpoint from Hugging Face through Meta's build_sam2_hf helper.
+  sam2_checkpoint: null
+  decoder_channels: 192
+
+training:
+  output_dir: outputs/segmentation/sam2.1_hiera_small_poc
+  device: auto
+  seed: 42
+
+  # Conservative POC defaults for a 16+ GB GPU.
+  epochs: 5
+  batch_size: 1
+  num_workers: 4
+  amp: true
+
+  # Epoch 1 trains only the semantic head. From epoch 2 onward the Hiera/FPN
+  # encoder is unfrozen and fine-tuned with a 10x smaller learning rate.
+  freeze_encoder_epochs: 1
+  encoder_lr: 1.0e-5
+  decoder_lr: 1.0e-4
+  weight_decay: 0.01
+  warmup_epochs: 1
+  grad_clip_norm: 1.0
+
+  # Rare carcinoma/tissue classes are strongly imbalanced in pixel count.
+  # The trainer computes sqrt-inverse-frequency CE weights from train labels.
+  ce_weight: 1.0
+  dice_weight: 1.0
+  exclude_background_from_dice: true
