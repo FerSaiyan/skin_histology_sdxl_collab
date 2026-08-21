@@ -280,6 +280,32 @@ See `dvc.yaml` for all stages organized by workflow domain. Note: `build_gradcam
 
 ---
 
+## SAM2.1 Semantic Segmentation
+
+The POC-v2 Small and Large configs use the same class-aware slide split and
+training protocol:
+
+```bash
+python scripts/segmentation/train_sam2_hiera_semantic.py \
+  --config configs/segmentation/sam2.1_hiera_large_histoseg_poc_v2.yaml
+```
+
+Training writes `best.pt`, `last.pt`, and `history.json`. To continue a
+completed or interrupted run through epoch 15, resume from `last.pt` and set
+the new total epoch target:
+
+```bash
+python scripts/segmentation/train_sam2_hiera_semantic.py \
+  --config configs/segmentation/sam2.1_hiera_large_histoseg_poc_v2.yaml \
+  --resume outputs/segmentation/sam2.1_hiera_large_poc_v2/last.pt \
+  --epochs 15
+```
+
+The resume path restores model and optimizer state, preserves history, and
+recomputes the cosine schedule against the new total epoch target.
+
+---
+
 ## Project Layout
 
 ```
@@ -292,6 +318,7 @@ scripts/
   3d/                                   # 3D volume inpainting pipeline
   synthetic_data/                       # SDXL training (Akio's PC only)
   patches/                              # ROI extraction (Akio's PC only)
+  segmentation/                         # SAM2.1 semantic segmentation
 params.yaml                             # Central config — sectioned per workflow
 dvc.yaml                                # Pipeline stages (submission repro)
 ```

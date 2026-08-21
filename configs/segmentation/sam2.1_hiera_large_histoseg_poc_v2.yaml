@@ -1,0 +1,54 @@
+# SAM2.1 Hiera Large comparison using the same POC-v2 data/training protocol.
+# Pass --resume <output_dir>/last.pt --epochs <new_total> to continue.
+
+data:
+  tiles_root: data/artifacts/tiles_for_simulation
+  splits_csv: data/artifacts/tiles_for_simulation/segmentation_splits_v2.csv
+  train_split: train
+  val_split: val
+  encoder_size: 1024
+
+model:
+  num_classes: 12
+  sam2_model_id: facebook/sam2.1-hiera-large
+  sam2_config: configs/sam2.1/sam2.1_hiera_l.yaml
+  sam2_checkpoint: null
+  decoder_channels: 192
+
+training:
+  output_dir: outputs/segmentation/sam2.1_hiera_large_poc_v2
+  device: auto
+  seed: 42
+  epochs: 10
+  batch_size: 1
+  num_workers: 4
+  amp: true
+  freeze_encoder_epochs: 1
+  encoder_lr: 1.0e-5
+  decoder_lr: 1.0e-4
+  weight_decay: 0.01
+  warmup_epochs: 1
+  grad_clip_norm: 1.0
+  ce_weight: 1.0
+  dice_weight: 1.0
+  exclude_background_from_dice: true
+
+sampling:
+  enabled: true
+  rarity_power: 0.25
+  rare_strength: 1.5
+  min_class_pixels_in_tile: 64
+  max_tile_weight: 4.0
+  epoch_multiplier: 1.0
+
+class_weighting:
+  power: 0.25
+  min_weight: 0.5
+  max_weight: 2.5
+
+augmentation:
+  strength: 1.0
+
+metrics:
+  supported_min_gt_pixels: 1024
+  checkpoint_metric: macro_dice_supported

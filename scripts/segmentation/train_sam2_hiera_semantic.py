@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train a SAM2.1 Hiera Small semantic segmenter on simulation tiles."""
+"""Train a SAM2.1 Hiera semantic segmenter on simulation tiles."""
 
 from __future__ import annotations
 
@@ -37,6 +37,18 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--config", default="configs/segmentation/sam2.1_hiera_small_histoseg_poc.yaml")
     ap.add_argument("--max-train-batches", type=int, default=0)
     ap.add_argument("--max-val-batches", type=int, default=0)
+    ap.add_argument(
+        "--epochs",
+        type=int,
+        default=0,
+        help="Override training.epochs (use with --resume to extend a run)",
+    )
+    ap.add_argument(
+        "--resume",
+        default="",
+        metavar="CHECKPOINT",
+        help="Resume from last.pt/best.pt; increase training.epochs to extend a completed run",
+    )
     return ap.parse_args()
 
 
@@ -78,6 +90,28 @@ def _lr_lambda(epoch: int, total_epochs: int, warmup_epochs: int) -> float:
     denom = max(1, total_epochs - warmup_epochs)
     progress = min(1.0, max(0.0, (epoch - warmup_epochs) / denom))
     return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def _set_resumed_learning_rates(optimizer, scheduler, *, completed_epochs: int,
+                                total_epochs: int, warmup_epochs: int) -> None:
+    """Set the LR for the next epoch using the current target epoch count.
+
+    Recomputing the factor is important when a completed cosine schedule is
+    extended, because the checkpoint's optimizer LR is otherwise zero.
+    """
+    factor = _lr_lambda(completed_epochs, total_epochs, warmup_epochs)
+    for group, base_lr in zip(optimizer.param_groups, scheduler.base_lrs):
+        group["lr"] = float(base_lr) * factor
+    scheduler.last_epoch = int(completed_epochs)
+    scheduler._last_lr = [group["lr"] for group in optimizer.param_groups]
+
+
+def _resume_history(output_dir: Path, completed_epochs: int) -> list[Dict[str, object]]:
+    history_path = output_dir / "history.json"
+    if not history_path.is_file():
+        return []
+    history = json.loads(history_path.read_text(encoding="utf-8"))
+    return [record for record in history if int(record.get("epoch", 0)) <= completed_epochs]
 
 
 def _run_epoch(*, model, loader, device, optimizer, class_weights, num_classes, ce_weight, dice_weight,
@@ -132,18 +166,21 @@ def _run_epoch(*, model, loader, device, optimizer, class_weights, num_classes, 
     return metrics
 
 
-def _save_checkpoint(path: Path, *, model, optimizer, epoch, config, class_weights, val_metrics) -> None:
+def _save_checkpoint(path: Path, *, model, optimizer, scheduler, epoch, config, class_weights,
+                     val_metrics, best_score) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({
         "epoch": int(epoch),
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict(),
         "model_kwargs": model.checkpoint_model_kwargs(),
         "encoder_input_size": int(model.encoder_input_size),
         "class_names": CLASS_NAME_BY_ID,
         "class_weights": class_weights.detach().cpu(),
         "training_config": config,
         "val_metrics": val_metrics,
+        "best_score": float(best_score),
     }, path)
 
 
@@ -159,6 +196,13 @@ def main() -> int:
     aug_cfg = dict(config.get("augmentation", {}))
     metrics_cfg = dict(config.get("metrics", {}))
 
+    resume_path = Path(args.resume).resolve() if args.resume else None
+    resume_checkpoint = None
+    if resume_path is not None:
+        if not resume_path.is_file():
+            raise SystemExit(f"Resume checkpoint not found: {resume_path}")
+        resume_checkpoint = torch.load(resume_path, map_location="cpu", weights_only=True)
+
     seed = int(train_cfg.get("seed", 42))
     _seed_everything(seed)
     device = _device_from_config(str(train_cfg.get("device", "auto")))
@@ -166,14 +210,31 @@ def main() -> int:
     print(f"Device: {device}")
     print(f"SAM2 model: {model_cfg.get('sam2_model_id', 'local checkpoint')}")
 
+    configured_model_kwargs = {
+        "num_classes": num_classes,
+        "sam2_config": str(model_cfg.get("sam2_config", "configs/sam2.1/sam2.1_hiera_s.yaml")),
+        "sam2_model_id": model_cfg.get("sam2_model_id") or None,
+        "decoder_channels": int(model_cfg.get("decoder_channels", 192)),
+    }
+    model_kwargs = configured_model_kwargs
+    if resume_checkpoint is not None:
+        model_kwargs = dict(resume_checkpoint["model_kwargs"])
+        for key in ("num_classes", "sam2_config", "sam2_model_id", "decoder_channels"):
+            if model_kwargs.get(key) != configured_model_kwargs.get(key):
+                raise SystemExit(
+                    f"Resume checkpoint model mismatch for {key}: "
+                    f"checkpoint={model_kwargs.get(key)!r}, config={configured_model_kwargs.get(key)!r}"
+                )
     model = SAM2HieraSemanticSegmenter(
-        num_classes=num_classes,
-        sam2_config=str(model_cfg.get("sam2_config", "configs/sam2.1/sam2.1_hiera_s.yaml")),
-        sam2_checkpoint=model_cfg.get("sam2_checkpoint") or None,
-        sam2_model_id=model_cfg.get("sam2_model_id") or None,
-        load_pretrained=True,
-        decoder_channels=int(model_cfg.get("decoder_channels", 192)),
+        num_classes=int(model_kwargs["num_classes"]),
+        sam2_config=str(model_kwargs["sam2_config"]),
+        sam2_checkpoint=None if resume_checkpoint is not None else model_cfg.get("sam2_checkpoint") or None,
+        sam2_model_id=model_kwargs.get("sam2_model_id"),
+        load_pretrained=resume_checkpoint is None,
+        decoder_channels=int(model_kwargs["decoder_channels"]),
     )
+    if resume_checkpoint is not None:
+        model.load_state_dict(resume_checkpoint["model_state"], strict=True)
     encoder_size = int(model.encoder_input_size)
     if int(data_cfg.get("encoder_size", encoder_size)) != encoder_size:
         print(f"[WARN] Config encoder_size={data_cfg.get('encoder_size')} but official SAM2 model uses {encoder_size}; using {encoder_size}.")
@@ -236,13 +297,18 @@ def main() -> int:
 
     model = model.to(device)
     freeze_encoder_epochs = int(train_cfg.get("freeze_encoder_epochs", 1))
-    model.set_encoder_trainable(freeze_encoder_epochs <= 0)
+    start_epoch = int(resume_checkpoint.get("epoch", 0)) if resume_checkpoint is not None else 0
+    model.set_encoder_trainable(start_epoch >= freeze_encoder_epochs)
     optimizer = torch.optim.AdamW([
         {"params": list(model.encoder_parameters()), "lr": float(train_cfg.get("encoder_lr", 1e-5))},
         {"params": list(model.decoder_parameters()), "lr": float(train_cfg.get("decoder_lr", 1e-4))},
     ], weight_decay=float(train_cfg.get("weight_decay", 0.01)))
+    if resume_checkpoint is not None:
+        optimizer.load_state_dict(resume_checkpoint["optimizer_state"])
 
-    epochs = int(train_cfg.get("epochs", 5))
+    epochs = int(args.epochs) if int(args.epochs) > 0 else int(train_cfg.get("epochs", 5))
+    train_cfg["epochs"] = epochs
+    config["training"] = train_cfg
     warmup_epochs = int(train_cfg.get("warmup_epochs", 1))
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lr_lambda=lambda e: _lr_lambda(e, epochs, warmup_epochs)
@@ -251,11 +317,36 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "resolved_config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
 
+    if start_epoch >= epochs:
+        raise SystemExit(
+            f"Checkpoint already completed epoch {start_epoch}; set training.epochs above {start_epoch} to continue"
+        )
+    if resume_checkpoint is not None:
+        if "scheduler_state" in resume_checkpoint:
+            scheduler.load_state_dict(resume_checkpoint["scheduler_state"])
+        _set_resumed_learning_rates(
+            optimizer,
+            scheduler,
+            completed_epochs=start_epoch,
+            total_epochs=epochs,
+            warmup_epochs=warmup_epochs,
+        )
+        print(
+            f"Resumed {resume_path} after epoch {start_epoch}; "
+            f"continuing through epoch {epochs} with encoder_lr={optimizer.param_groups[0]['lr']:.3e} "
+            f"decoder_lr={optimizer.param_groups[1]['lr']:.3e}"
+        )
+
     supported_min_gt_pixels = int(metrics_cfg.get("supported_min_gt_pixels", 1024))
     checkpoint_metric = str(metrics_cfg.get("checkpoint_metric", "macro_dice_supported"))
-    history = []
-    best_score = -float("inf")
-    for epoch in range(epochs):
+    history = _resume_history(output_dir, start_epoch)
+    historical_scores = [
+        float(record["val"].get(checkpoint_metric, record["val"]["macro_dice_present"]))
+        for record in history
+    ]
+    best_score = max(historical_scores, default=float(resume_checkpoint.get("best_score", -float("inf")))
+                     if resume_checkpoint is not None else -float("inf"))
+    for epoch in range(start_epoch, epochs):
         if epoch == freeze_encoder_epochs and freeze_encoder_epochs > 0:
             model.set_encoder_trainable(True)
             print(f"Epoch {epoch + 1}: unfroze SAM2.1 Hiera image encoder")
@@ -297,12 +388,15 @@ def main() -> int:
             f"present={val_metrics['macro_dice_present']:.4f} fixed={val_metrics['macro_dice_fixed']:.4f} "
             f"supported={val_metrics['macro_dice_supported']:.4f} select({checkpoint_metric})={score:.4f}"
         )
-        _save_checkpoint(output_dir / "last.pt", model=model, optimizer=optimizer,
-                         epoch=epoch + 1, config=config, class_weights=class_weights, val_metrics=val_metrics)
-        if score > best_score:
-            best_score = score
-            _save_checkpoint(output_dir / "best.pt", model=model, optimizer=optimizer,
-                             epoch=epoch + 1, config=config, class_weights=class_weights, val_metrics=val_metrics)
+        improved = score > best_score
+        best_score = max(best_score, score)
+        _save_checkpoint(output_dir / "last.pt", model=model, optimizer=optimizer, scheduler=scheduler,
+                         epoch=epoch + 1, config=config, class_weights=class_weights,
+                         val_metrics=val_metrics, best_score=best_score)
+        if improved:
+            _save_checkpoint(output_dir / "best.pt", model=model, optimizer=optimizer, scheduler=scheduler,
+                             epoch=epoch + 1, config=config, class_weights=class_weights,
+                             val_metrics=val_metrics, best_score=best_score)
 
     print(f"Best validation {checkpoint_metric}: {best_score:.4f}")
     print(f"Checkpoints: {output_dir / 'best.pt'} and {output_dir / 'last.pt'}")
