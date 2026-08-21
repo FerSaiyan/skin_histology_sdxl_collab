@@ -44,11 +44,11 @@ stages:
 
 # ===========================================================================
 # SIMULATION TILE DATASET — needed by friend (physics simulations)
-# Builds oriented 512×512 tiles with RGB + semantic labels + epidermis masks.
+# Builds oriented 512×512 tiles with the required RGB + semantic labels.
 # ===========================================================================
 
   build_tiles_for_simulation_dataset:
-    cmd: python scripts/optical_ga/build_tiles_for_simulation.py --pairs-csv data/processed/histoseg_pairs.csv --output-dir data/artifacts/tiles_for_simulation --manifest-csv data/artifacts/tiles_for_simulation/tiles_manifest.csv --stats-json data/artifacts/tiles_for_simulation/tiles_stats.json --tile-size 512 --stride 256 --min-tissue-frac 0.25 --max-tissue-frac 0.98 --min-epidermis-frac 0.02 --min-air-epidermis-interface-px 64 --min-normal-confidence 0.55 --max-tiles-per-image 0 --max-total-tiles 0 --workers 0
+    cmd: python scripts/optical_ga/build_tiles_for_simulation.py --mode simulation --pairs-csv data/processed/histoseg_pairs.csv --output-dir data/artifacts/tiles_for_simulation --manifest-csv data/artifacts/tiles_for_simulation/tiles_manifest.csv --stats-json data/artifacts/tiles_for_simulation/tiles_stats.json --tile-size 512 --stride 256 --screen-downsample 4 --min-tissue-frac 0.25 --max-tissue-frac 0.98 --min-epidermis-frac 0.02 --min-air-epidermis-interface-px 64 --min-normal-confidence 0.55 --max-tiles-per-image 0 --max-total-tiles 0 --workers 0
     deps:
       - scripts/optical_ga/build_tiles_for_simulation.py
       - scripts/optical_ga/estimate_epidermis_normal.py
@@ -59,12 +59,6 @@ stages:
       - data/artifacts/tiles_for_simulation/rgb:
           cache: false
       - data/artifacts/tiles_for_simulation/label_id:
-          cache: false
-      - data/artifacts/tiles_for_simulation/label_vis:
-          cache: false
-      - data/artifacts/tiles_for_simulation/epidermis_mask:
-          cache: false
-      - data/artifacts/tiles_for_simulation/meta:
           cache: false
       - data/artifacts/tiles_for_simulation/tiles_manifest.csv:
           cache: false
@@ -77,6 +71,7 @@ stages:
       - simulation_tiles.stats_json
       - simulation_tiles.tile_size
       - simulation_tiles.stride
+      - simulation_tiles.screen_downsample
       - simulation_tiles.min_tissue_frac
       - simulation_tiles.max_tissue_frac
       - simulation_tiles.min_epidermis_frac
@@ -85,6 +80,32 @@ stages:
       - simulation_tiles.max_tiles_per_image
       - simulation_tiles.max_total_tiles
       - simulation_tiles.workers
+
+  build_tiles_for_segmentation_dataset:
+    cmd: python scripts/optical_ga/build_tiles_for_simulation.py --mode segmentation --storage hdf5 --staging-dir /tmp/histoseg-tile-staging --pairs-csv data/processed/histoseg_pairs.csv --output-dir data/artifacts/tiles_for_segmentation_hdf5 --manifest-csv data/artifacts/tiles_for_segmentation_hdf5/tiles_manifest.csv --stats-json data/artifacts/tiles_for_segmentation_hdf5/tiles_stats.json --tile-size 512 --stride 128 --screen-downsample 4 --min-tissue-frac 0.25 --max-tissue-frac 1.0 --workers 4
+    deps:
+      - scripts/optical_ga/build_tiles_for_simulation.py
+      - params.yaml
+      - data/processed/histoseg_pairs.csv
+    outs:
+      - data/artifacts/tiles_for_segmentation_hdf5/shards:
+          cache: false
+      - data/artifacts/tiles_for_segmentation_hdf5/tiles_manifest.csv:
+          cache: false
+      - data/artifacts/tiles_for_segmentation_hdf5/tiles_stats.json:
+          cache: false
+    params:
+      - segmentation_tiles.source_pairs_csv
+      - segmentation_tiles.output_dir
+      - segmentation_tiles.manifest_csv
+      - segmentation_tiles.stats_json
+      - segmentation_tiles.tile_size
+      - segmentation_tiles.stride
+      - segmentation_tiles.screen_downsample
+      - segmentation_tiles.min_tissue_frac
+      - segmentation_tiles.max_tissue_frac
+      - segmentation_tiles.storage
+      - segmentation_tiles.workers
 
 # ===========================================================================
 # AKIO'S PC — SDXL LoRA config rendering + training (user's machine)

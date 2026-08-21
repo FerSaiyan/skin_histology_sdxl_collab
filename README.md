@@ -33,6 +33,7 @@ python scripts/build_histoseg_pairs_csv.py --dataset-dir data/raw/histo_seg_v2 -
 
 ```bash
 python scripts/optical_ga/build_tiles_for_simulation.py \
+  --mode simulation \
   --pairs-csv data/processed/histoseg_pairs.csv \
   --output-dir data/artifacts/tiles_for_simulation \
   --manifest-csv data/artifacts/tiles_for_simulation/tiles_manifest.csv \
@@ -42,10 +43,42 @@ python scripts/optical_ga/build_tiles_for_simulation.py \
 Outputs placed in `data/artifacts/tiles_for_simulation/`:
 - `rgb/*.png` — oriented RGB tiles
 - `label_id/*.npy` — semantic class-ID tiles
-- `label_vis/*.png` — class-color visualizations
-- `epidermis_mask/*.png` — oriented epidermis masks
-- `meta/*.json` — per-tile metadata
 - `tiles_manifest.csv`, `tiles_stats.json` — global index
+
+The manifest contains the orientation and class metadata. Derived
+`label_vis/*.png`, `epidermis_mask/*.png`, and per-tile JSON are optional; add
+`--write-label-vis`, `--write-epidermis-mask`, or `--write-tile-meta` only when
+standalone QC files are needed. The QC script derives missing visualizations
+and epidermis masks directly from `label_id`.
+
+### 4b) Build dense segmentation tiles
+
+Segmentation mode keeps every 512×512 window with at least 25% labeled tissue.
+It does not require epidermis, a surface interface, or normal estimation. The
+default 128-pixel stride provides dense coverage. Per-slide HDF5 shards avoid
+creating hundreds of thousands of small files; use fast local scratch for
+construction when the repository is on a hard disk:
+
+```bash
+python scripts/optical_ga/build_tiles_for_simulation.py \
+  --mode segmentation --storage hdf5 \
+  --staging-dir /tmp/histoseg-tile-staging \
+  --pairs-csv data/processed/histoseg_pairs.csv \
+  --output-dir data/artifacts/tiles_for_segmentation_hdf5 \
+  --tile-size 512 --stride 128 --min-tissue-frac 0.25 \
+  --workers 4
+```
+
+The segmentation loader reads `shards/*.h5` directly. To preserve an existing
+slide split while expanding its tiles:
+
+```bash
+python scripts/segmentation/build_segmentation_splits.py \
+  --tiles-root data/artifacts/tiles_for_segmentation_hdf5 \
+  --reuse-assignment-csv data/artifacts/tiles_for_simulation/segmentation_splits_v2.csv \
+  --output-csv data/artifacts/tiles_for_segmentation_hdf5/segmentation_splits_v2_dense.csv \
+  --stats-json data/artifacts/tiles_for_segmentation_hdf5/segmentation_splits_v2_dense_stats.json
+```
 
 ### 5) Optical GA smoke test (fast, surrogate, no MCX)
 
@@ -121,7 +154,7 @@ pip install PyXOpto
 
 | Script | Purpose |
 |--------|---------|
-| `build_tiles_for_simulation.py` | Oriented 512×512 tiles from Histo-Seg slices |
+| `build_tiles_for_simulation.py` | Fast simulation-oriented or dense segmentation tiles from Histo-Seg slices |
 | `estimate_epidermis_normal.py` | PCA-based epidermis normal estimation |
 | `select_orient_tile_for_incidence.py` | Align tile to epidermis incidence angle |
 | `ga_optimiser_optical.py` | GA for 19-parameter skin genome estimation |
@@ -268,6 +301,7 @@ pip install dvc
 
 # Murilo's machine (simulations)
 dvc repro build_tiles_for_simulation_dataset
+dvc repro build_tiles_for_segmentation_dataset
 dvc repro run_optical_ga_smoke
 dvc repro run_mvp_multiphysics_smoke
 
@@ -322,6 +356,7 @@ also restores its early-stopping patience counter.
 ```
 data/raw/histo_seg_v2/                  # Histo-Seg JPEG + PNG pairs (gitignored)
 data/artifacts/tiles_for_simulation/    # Oriented simulation tiles
+data/artifacts/tiles_for_segmentation_hdf5/ # Dense per-slide segmentation shards
 configs/                                # GA bounds, priors, SDXL phase configs
 scripts/
   optical_ga/                           # GA + oriented tile + batch compare

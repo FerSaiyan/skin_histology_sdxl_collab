@@ -7,12 +7,19 @@ import argparse
 import csv
 import json
 import random
+import sys
 from pathlib import Path
 from typing import Dict, List
 
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
+
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from scripts.optical_ga.build_tiles_for_simulation import _label_vis
 
 
 def _load_manifest(path: Path) -> List[Dict[str, str]]:
@@ -109,8 +116,17 @@ def _make_contact_sheet(rows: List[Dict[str, str]], dataset_root: Path, out_path
     for i, r in enumerate(sampled):
         chosen_ids.append(r["tile_id"])
         rgb = np.asarray(Image.open(dataset_root / r["rgb_path"]).convert("RGB"))
-        vis = np.asarray(Image.open(dataset_root / r["label_vis_path"]).convert("RGB"))
-        epi = np.asarray(Image.open(dataset_root / r["epidermis_mask_path"]).convert("L"))
+        label = np.load(dataset_root / r["label_id_npy_path"])
+        vis_path = r.get("label_vis_path", "")
+        epi_path = r.get("epidermis_mask_path", "")
+        vis = (
+            np.asarray(Image.open(dataset_root / vis_path).convert("RGB"))
+            if vis_path else _label_vis(label)
+        )
+        epi = (
+            np.asarray(Image.open(dataset_root / epi_path).convert("L"))
+            if epi_path else ((label == 1) * 255).astype(np.uint8)
+        )
 
         axes[i, 0].imshow(rgb)
         axes[i, 0].set_title(

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import csv
+import io
+import json
 import random
 from pathlib import Path
 from typing import Dict, List
@@ -15,6 +17,11 @@ import torchvision.transforms.functional as TF
 from PIL import Image, ImageEnhance, ImageOps
 from torch.utils.data import Dataset
 from torchvision.transforms import InterpolationMode
+
+try:
+    import h5py
+except Exception:  # pragma: no cover - only required by sharded manifests
+    h5py = None
 
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -163,22 +170,54 @@ class HistosegSimulationTileDataset(Dataset):
         self.augmentation_strength = float(augmentation_strength)
         self.augmentation_config = dict(augmentation_config or {})
         self.rows = load_split_rows(self.splits_csv, split)
+        self._shards: Dict[str, object] = {}
         if self.encoder_size <= 0:
             raise ValueError("encoder_size must be > 0")
 
     def __len__(self) -> int:
         return len(self.rows)
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_shards"] = {}
+        return state
+
+    def _open_shard(self, path: Path):
+        if h5py is None:
+            raise RuntimeError("HDF5 tile loading requires h5py; install requirements-segmentation.txt")
+        key = str(path)
+        shard = self._shards.get(key)
+        if shard is None:
+            shard = h5py.File(path, "r")
+            self._shards[key] = shard
+        return shard
+
     def __getitem__(self, index: int) -> Dict[str, object]:
         row = self.rows[index]
-        rgb_path = _resolve(self.tiles_root, row["rgb_path"])
-        label_path = _resolve(self.tiles_root, row["label_id_npy_path"])
-        if not rgb_path.is_file():
-            raise FileNotFoundError(rgb_path)
-        if not label_path.is_file():
-            raise FileNotFoundError(label_path)
-        image = Image.open(rgb_path).convert("RGB")
-        labels = np.asarray(np.load(label_path), dtype=np.int64)
+        if row.get("storage") == "hdf5":
+            shard_path = _resolve(self.tiles_root, row["shard_path"])
+            if not shard_path.is_file():
+                raise FileNotFoundError(shard_path)
+            shard_index = int(row["shard_index"])
+            shard = self._open_shard(shard_path)
+            if "rgb_bytes" in shard:
+                offsets = shard["rgb_offsets"]
+                start, end = int(offsets[shard_index]), int(offsets[shard_index + 1])
+                encoded = np.asarray(shard["rgb_bytes"][start:end], dtype=np.uint8).tobytes()
+            else:
+                encoded = np.asarray(shard["rgb_jpeg"][shard_index], dtype=np.uint8).tobytes()
+            image = Image.open(io.BytesIO(encoded)).convert("RGB")
+            labels = np.asarray(shard["labels"][shard_index], dtype=np.int64)
+            rgb_path = label_path = Path(f"{shard_path}#{shard_index}")
+        else:
+            rgb_path = _resolve(self.tiles_root, row["rgb_path"])
+            label_path = _resolve(self.tiles_root, row["label_id_npy_path"])
+            if not rgb_path.is_file():
+                raise FileNotFoundError(rgb_path)
+            if not label_path.is_file():
+                raise FileNotFoundError(label_path)
+            image = Image.open(rgb_path).convert("RGB")
+            labels = np.asarray(np.load(label_path), dtype=np.int64)
         if labels.ndim != 2:
             raise ValueError(f"Expected 2D label map, got {labels.shape} at {label_path}")
         if self.augment:
@@ -207,9 +246,14 @@ def compute_pixel_class_counts(*, tiles_root: str | Path, splits_csv: str | Path
     rows = load_split_rows(Path(splits_csv).resolve(), split)
     counts = np.zeros(int(num_classes), dtype=np.int64)
     for row in rows:
-        labels = np.load(_resolve(root, row["label_id_npy_path"]), mmap_mode="r")
-        uniq, c = np.unique(labels, return_counts=True)
-        for cid, count in zip(uniq.tolist(), c.tolist()):
+        histogram = row.get("class_histogram", "")
+        if histogram:
+            class_counts = ((int(cid), int(count)) for cid, count in json.loads(histogram).items())
+        else:
+            labels = np.load(_resolve(root, row["label_id_npy_path"]), mmap_mode="r")
+            uniq, tile_counts = np.unique(labels, return_counts=True)
+            class_counts = zip(uniq.tolist(), tile_counts.tolist())
+        for cid, count in class_counts:
             cid = int(cid)
             if 0 <= cid < num_classes:
                 counts[cid] += int(count)
@@ -254,11 +298,18 @@ def compute_tile_sampling_weights(*, tiles_root: str | Path, splits_csv: str | P
     rarity[0] = 1.0
     weights = np.ones(len(rows), dtype=np.float64)
     for i, row in enumerate(rows):
-        labels = np.load(_resolve(root, row["label_id_npy_path"]), mmap_mode="r")
-        uniq, counts = np.unique(labels, return_counts=True)
-        tile_pixels = float(labels.size)
+        histogram = row.get("class_histogram", "")
+        if histogram:
+            parsed = {int(cid): int(count) for cid, count in json.loads(histogram).items()}
+            class_counts = parsed.items()
+            tile_pixels = float(sum(parsed.values()))
+        else:
+            labels = np.load(_resolve(root, row["label_id_npy_path"]), mmap_mode="r")
+            uniq, counts = np.unique(labels, return_counts=True)
+            class_counts = zip(uniq.tolist(), counts.tolist())
+            tile_pixels = float(labels.size)
         boost = 0.0
-        for cid, count in zip(uniq.tolist(), counts.tolist()):
+        for cid, count in class_counts:
             cid = int(cid)
             count = int(count)
             if cid <= 0 or cid >= num_classes or count < int(min_class_pixels_in_tile):

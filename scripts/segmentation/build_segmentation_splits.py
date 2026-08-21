@@ -38,6 +38,11 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--num-classes", type=int, default=12)
     ap.add_argument("--min-class-pixels-per-slide", type=int, default=1)
     ap.add_argument("--skip-class-stats", action="store_true")
+    ap.add_argument(
+        "--reuse-assignment-csv",
+        default="",
+        help="Reuse slide-to-split assignments from an existing tile split CSV.",
+    )
     return ap.parse_args()
 
 
@@ -48,10 +53,16 @@ def _load_rows(path: Path) -> List[Dict[str, str]]:
         rows = list(csv.DictReader(f))
     if not rows:
         raise SystemExit(f"Manifest is empty: {path}")
-    required = {"tile_id", "slide_id", "rgb_path", "label_id_npy_path"}
+    required = {"tile_id", "slide_id"}
     missing = required.difference(rows[0])
     if missing:
         raise SystemExit(f"Manifest missing columns: {sorted(missing)}")
+    for row in rows:
+        if row.get("storage") == "hdf5":
+            if not row.get("shard_path") or row.get("shard_index", "") == "":
+                raise SystemExit("HDF5 manifest rows require shard_path and shard_index")
+        elif not row.get("rgb_path") or not row.get("label_id_npy_path"):
+            raise SystemExit("File manifest rows require rgb_path and label_id_npy_path")
     return rows
 
 
@@ -80,9 +91,39 @@ def _split_counts(n: int, train_frac: float, val_frac: float, test_frac: float) 
     return {"train": int(counts[0]), "val": int(counts[1]), "test": int(counts[2])}
 
 
+def _load_reused_assignment(path: Path, slides: List[str]) -> Dict[str, str]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assignment: Dict[str, str] = {}
+    for row in rows:
+        slide_id = row.get("slide_id", "")
+        split = row.get("split", "")
+        if not slide_id or split not in {"train", "val", "test"}:
+            continue
+        previous = assignment.setdefault(slide_id, split)
+        if previous != split:
+            raise SystemExit(f"Slide {slide_id!r} has conflicting reused splits")
+    missing = sorted(set(slides).difference(assignment))
+    if missing:
+        raise SystemExit(f"Reused assignment is missing {len(missing)} slides: {missing[:10]}")
+    return {slide: assignment[slide] for slide in slides}
+
+
 def _resolve_under_root(path_text: str, root: Path) -> Path:
     p = Path(path_text)
     return p if p.is_absolute() else root / p
+
+
+def _row_class_counts(row: Dict[str, str], root: Path) -> List[Tuple[int, int]]:
+    histogram = row.get("class_histogram", "")
+    if histogram:
+        return [(int(class_id), int(count)) for class_id, count in json.loads(histogram).items()]
+    label_path = _resolve_under_root(row["label_id_npy_path"], root)
+    if not label_path.is_file():
+        raise FileNotFoundError(label_path)
+    labels = np.load(label_path, mmap_mode="r")
+    unique, counts = np.unique(labels, return_counts=True)
+    return list(zip(unique.tolist(), counts.tolist()))
 
 
 def _build_slide_stats(rows, root: Path, num_classes: int) -> Tuple[List[str], np.ndarray, np.ndarray, np.ndarray]:
@@ -93,13 +134,8 @@ def _build_slide_stats(rows, root: Path, num_classes: int) -> Tuple[List[str], n
     tile_counts = np.zeros(len(slides), dtype=np.int64)
     for row in rows:
         si = slide_to_idx[row["slide_id"]]
-        label_path = _resolve_under_root(row["label_id_npy_path"], root)
-        if not label_path.is_file():
-            raise FileNotFoundError(label_path)
-        labels = np.load(label_path, mmap_mode="r")
-        uniq, counts = np.unique(labels, return_counts=True)
         tile_counts[si] += 1
-        for cid, count in zip(uniq.tolist(), counts.tolist()):
+        for cid, count in _row_class_counts(row, root):
             cid = int(cid)
             if 0 <= cid < num_classes:
                 pixel_counts[si, cid] += int(count)
@@ -188,13 +224,12 @@ def _collect_class_stats(rows, root: Path):
     missing_labels = []
     for row in rows:
         split = row["split"]
-        label_path = _resolve_under_root(row["label_id_npy_path"], root)
-        if not label_path.is_file():
-            missing_labels.append(str(label_path))
+        try:
+            class_counts = _row_class_counts(row, root)
+        except FileNotFoundError as error:
+            missing_labels.append(str(error))
             continue
-        labels = np.load(label_path, mmap_mode="r")
-        uniq, counts = np.unique(labels, return_counts=True)
-        for cid, count in zip(uniq.tolist(), counts.tolist()):
+        for cid, count in class_counts:
             key = str(int(cid))
             pixel_counts[split][key] += int(count)
             tiles_with_class[split][key] += 1
@@ -214,12 +249,18 @@ def main() -> int:
     stats_json = Path(args.stats_json).resolve() if args.stats_json else tiles_root / "segmentation_splits_stats.json"
     rows = _load_rows(manifest)
     slides, slide_pixels, slide_class_tiles, slide_tile_counts = _build_slide_stats(rows, tiles_root, int(args.num_classes))
-    assignment, assignment_score = assign_slide_splits_class_aware(
-        slides, slide_pixels, slide_class_tiles, slide_tile_counts,
-        train_frac=float(args.train_frac), val_frac=float(args.val_frac), test_frac=float(args.test_frac),
-        seed=int(args.seed), search_attempts=int(args.search_attempts),
-        min_class_pixels_per_slide=int(args.min_class_pixels_per_slide),
-    )
+    if args.reuse_assignment_csv:
+        assignment_source = str(Path(args.reuse_assignment_csv).resolve())
+        assignment = _load_reused_assignment(Path(assignment_source), slides)
+        assignment_score = None
+    else:
+        assignment_source = "class_aware_search"
+        assignment, assignment_score = assign_slide_splits_class_aware(
+            slides, slide_pixels, slide_class_tiles, slide_tile_counts,
+            train_frac=float(args.train_frac), val_frac=float(args.val_frac), test_frac=float(args.test_frac),
+            seed=int(args.seed), search_attempts=int(args.search_attempts),
+            min_class_pixels_per_slide=int(args.min_class_pixels_per_slide),
+        )
     for row in rows:
         row["split"] = assignment[row["slide_id"]]
     output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -247,7 +288,9 @@ def main() -> int:
         }
     stats = {
         "source_manifest": str(manifest), "output_csv": str(output_csv), "seed": int(args.seed),
-        "search_attempts": int(args.search_attempts), "assignment_score": float(assignment_score),
+        "search_attempts": int(args.search_attempts),
+        "assignment_score": float(assignment_score) if assignment_score is not None else None,
+        "assignment_source": assignment_source,
         "fractions": {"train": float(args.train_frac), "val": float(args.val_frac), "test": float(args.test_frac)},
         "slide_counts": {k: len(v) for k, v in slides_by_split.items()}, "tile_counts": dict(tiles_by_split),
         "slides": {k: sorted(v) for k, v in slides_by_split.items()}, "class_slide_support": support_report,
@@ -258,7 +301,10 @@ def main() -> int:
     stats_json.write_text(json.dumps(stats, indent=2), encoding="utf-8")
     print(f"Wrote split manifest: {output_csv}")
     print(f"Wrote split stats   : {stats_json}")
-    print(f"Class-aware assignment score: {assignment_score:.3f}")
+    if assignment_score is not None:
+        print(f"Class-aware assignment score: {assignment_score:.3f}")
+    else:
+        print(f"Reused slide assignment: {assignment_source}")
     for split in ("train", "val", "test"):
         print(f"{split:>5}: {len(slides_by_split.get(split, set()))} slides, {tiles_by_split.get(split, 0)} tiles")
     return 0

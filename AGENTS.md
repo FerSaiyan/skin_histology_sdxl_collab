@@ -22,7 +22,8 @@ data/                         # Gitignored — materialized on each machine
   raw/histo_seg_v2/           # Histo-Seg JPG + PNG pairs (downloaded via script)
   processed/                  # Pair CSVs, tile indexes
   artifacts/
-    tiles_for_simulation/     # Oriented 512×512 simulation tiles (RGB + labels + epidermis masks)
+    tiles_for_simulation/     # Oriented 512×512 simulation tiles (RGB + labels)
+    tiles_for_segmentation_hdf5/ # Dense per-slide segmentation shards
     mvp/                      # Multi-physics MVP smoke test outputs
     3d/                       # 3D coherence test runs
 configs/
@@ -103,6 +104,7 @@ python scripts/build_histoseg_pairs_csv.py --dataset-dir data/raw/histo_seg_v2 -
 
 ```bash
 python scripts/optical_ga/build_tiles_for_simulation.py \
+  --mode simulation \
   --pairs-csv data/processed/histoseg_pairs.csv \
   --output-dir data/artifacts/tiles_for_simulation \
   --manifest-csv data/artifacts/tiles_for_simulation/tiles_manifest.csv \
@@ -112,10 +114,15 @@ python scripts/optical_ga/build_tiles_for_simulation.py \
 This writes `data/artifacts/tiles_for_simulation` with:
 - RGB tiles (`rgb/*.png`)
 - semantic class-ID tiles (`label_id/*.npy`)
-- class-color visualizations (`label_vis/*.png`)
-- epidermis masks (`epidermis_mask/*.png`)
-- per-tile metadata (`meta/*.json`)
 - global manifest + stats (`tiles_manifest.csv`, `tiles_stats.json`)
+
+Derived `label_vis`, `epidermis_mask`, and per-tile JSON files are optional.
+Use their corresponding `--write-*` flags only for standalone QC artifacts.
+
+For the dense segmentation dataset, use `--mode segmentation --storage hdf5`
+with stride 128. This mode requires only enough labeled tissue and stores one
+HDF5 shard per source slide. When the repo is on a hard disk, pass a fast local
+`--staging-dir` such as `/tmp/histoseg-tile-staging`.
 
 ### 8) Run optical GA smoke test (fast, surrogate mode, no MCX needed)
 
@@ -224,6 +231,7 @@ dvc repro build_histoseg_pairs_csv
 
 # Simulation tile dataset (one-time)
 dvc repro build_tiles_for_simulation_dataset
+dvc repro build_tiles_for_segmentation_dataset
 
 # Optical GA smoke tests
 dvc repro run_optical_ga_smoke
@@ -260,7 +268,7 @@ dvc repro run_3d_volume_inpaint_tile_smoke
 
 | Script | Description |
 |--------|-------------|
-| `build_tiles_for_simulation.py` | Build oriented 512×512 simulation tiles (RGB + semantic labels + epidermis masks) |
+| `build_tiles_for_simulation.py` | Build fast simulation-oriented or dense segmentation tiles |
 | `estimate_epidermis_normal.py` | PCA-based epidermis normal estimation |
 | `select_orient_tile_for_incidence.py` | Align tile to epidermis incidence angle |
 | `ga_optimiser_optical.py` | Genetic algorithm for skin parameter estimation |

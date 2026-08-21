@@ -80,12 +80,14 @@ tile_masks:
 # MURILO'S PC — Physics-ready simulation tile dataset (build_tiles_for_simulation)
 # =============================================================================
 simulation_tiles:
+  mode: simulation
   source_pairs_csv: data/processed/histoseg_pairs.csv
   output_dir: data/artifacts/tiles_for_simulation
   manifest_csv: data/artifacts/tiles_for_simulation/tiles_manifest.csv
   stats_json: data/artifacts/tiles_for_simulation/tiles_stats.json
   tile_size: 512
   stride: 256
+  screen_downsample: 4
   min_tissue_frac: 0.25
   max_tissue_frac: 0.98
   min_epidermis_frac: 0.02
@@ -94,6 +96,23 @@ simulation_tiles:
   max_tiles_per_image: 0
   max_total_tiles: 0
   workers: 0
+
+# =============================================================================
+# MURILO'S PC — Dense segmentation tiles (no epidermis/interface requirement)
+# =============================================================================
+segmentation_tiles:
+  mode: segmentation
+  source_pairs_csv: data/processed/histoseg_pairs.csv
+  output_dir: data/artifacts/tiles_for_segmentation_hdf5
+  manifest_csv: data/artifacts/tiles_for_segmentation_hdf5/tiles_manifest.csv
+  stats_json: data/artifacts/tiles_for_segmentation_hdf5/tiles_stats.json
+  tile_size: 512
+  stride: 128
+  screen_downsample: 4
+  min_tissue_frac: 0.25
+  max_tissue_frac: 1.0
+  storage: hdf5
+  workers: 4
 
 # =============================================================================
 # MURILO'S PC — Tile orientation (epidermis-air interface alignment)
