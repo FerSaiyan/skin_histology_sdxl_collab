@@ -1,0 +1,99 @@
+# Semantic inpainting v1: class-aligned same-class reconstruction.
+# Build the dataset first with scripts/synthetic_data/build_semantic_inpaint_dataset.py.
+# Cross-class behavior is evaluated after training with benchmark_semantic_inpainting.py;
+# synthetic cross-class outputs are NOT used as ground-truth training targets in v1.
+
+project_path: /home/fertroll10/Documents/ML/skin_histology_sdxl_collab
+training_mode: lora
+is_sdxl: true
+seed_name: "semantic_v1"
+fold_number: "1"
+dataset_subdir: null
+
+base_model_path: /home/fertroll10/Documents/ML/SUS_scraper/pretrained_models/sd_xl_base_1.0.safetensors
+kohya_scripts_dir: /home/fertroll10/Documents/ML/SUS_scraper/oral_lesions_project/kohya_ss/sd-scripts
+
+# The semantic dataset already contains a .caption next to every training image.
+# Do not regenerate captions from the old coarse cancer/non_cancer CSV.
+use_existing_dataset_captions: true
+dataset_path: data/artifacts/semantic_inpaint_v1/train/images
+materialize_from_labels_csv: false
+labels_csv_path: null
+
+resolution: "512,512"
+train_batch_size: 1
+gradient_accumulation_steps: 4
+dataset_repeats: 1
+
+# We use the independent semantic benchmark for model selection, so avoid the
+# older prompt-preview mechanism that can mismatch class prompts and masks.
+sample_every_n_steps: 1000000
+sample_every_n_epochs: 0
+sample_sampler: "ddim"
+sample_steps: 35
+sample_guidance_scale: 4.0
+sample_negative_prompt: "lowres,blurry,artifact,painting,illustration,cartoon,geometric pattern,abstract art"
+sample_prompt_template: "H&E stained skin histology, target tissue: {token}, realistic microscopy"
+sample_tokens:
+  - epidermis
+  - reticular dermis
+  - papillary dermis
+  - dermis
+  - keratin
+  - inflammation
+  - hair follicle
+  - skin gland
+  - basal cell carcinoma
+  - squamous cell carcinoma
+  - intraepidermal carcinoma
+sample_use_class_descriptors: false
+sample_seed_mode: per_class
+sample_seed_base: 222
+sample_denoising_strength: 0.55
+sample_mask_strength: 0.9
+sample_mask_blur_radius: 6.0
+
+# Slightly more capacity than the binary Phase-1 LoRA because the target space
+# now contains 11 explicit histological structures/classes.
+max_train_epochs: 8
+lr_warmup_steps: 300
+save_every_n_steps: 500
+save_every_n_epochs: 8
+noise_offset: 0.0
+optimizer_type: "AdamW8bit"
+gradient_checkpointing: true
+min_snr_gamma: 5
+lr_scheduler: "cosine_with_restarts"
+mixed_precision: "fp16"
+attn_backend: "sdpa"
+seed: 222
+
+# Captions are already materialized by the semantic dataset builder.
+caption_template: "H&E stained skin histology, target tissue: {token}, realistic microscopy"
+caption_use_class_descriptors: false
+
+lora_rank: 16
+lora_alpha: 16
+lora_lr: 2.0e-5
+# Natural language class names already have CLIP semantics. Keep the text
+# encoder frozen for v1 so improvements can be attributed to data alignment.
+lora_train_text_encoder: false
+lora_train_unet_only: true
+lora_te_only: false
+extra_train_args:
+  - --save_state
+
+# The builder writes binary class-aligned masks. The existing trainer performs
+# feathering/attenuation at training time, preserving a sharp raw mask for audit.
+lora_use_masked_loss: true
+lora_mask_mode: directory
+lora_mask_dir: data/artifacts/semantic_inpaint_v1/train/masks
+lora_mask_feather_radius: 6.0
+lora_mask_strength: 0.8
+lora_mask_processed_dir: null
+
+output_dir: outputs/finetunes/skin_histology_semantic_inpaint_v1
+logs_dir: outputs/logs/skin_histology_semantic_inpaint_v1
+
+mlflow_experiment: skin_histology_sdxl_semantic_inpaint_v1
+wandb_api_key: null
