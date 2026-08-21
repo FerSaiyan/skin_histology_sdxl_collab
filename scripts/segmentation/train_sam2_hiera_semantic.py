@@ -14,7 +14,7 @@ from typing import Dict
 import numpy as np
 import torch
 import yaml
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Sampler, WeightedRandomSampler
 from tqdm import tqdm
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -84,6 +84,44 @@ def _make_loader(dataset, *, batch_size, num_workers, shuffle, device, sampler=N
     )
 
 
+class FullCoverageWeightedSampler(Sampler[int]):
+    """Visit every tile once, then mix in weighted rare-class extras."""
+
+    def __init__(self, weights: torch.Tensor, *, num_samples: int, seed: int) -> None:
+        self.weights = torch.as_tensor(weights, dtype=torch.double).cpu()
+        self.dataset_size = int(self.weights.numel())
+        self.num_samples = int(num_samples)
+        self.seed = int(seed)
+        self.epoch = 0
+        if self.dataset_size <= 0:
+            raise ValueError("weights must not be empty")
+        if self.num_samples < self.dataset_size:
+            raise ValueError("num_samples must be >= dataset size for full coverage")
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
+    def __iter__(self):
+        generator = torch.Generator().manual_seed(self.seed + self.epoch)
+        base = torch.randperm(self.dataset_size, generator=generator)
+        extra_count = self.num_samples - self.dataset_size
+        if extra_count > 0:
+            extras = torch.multinomial(
+                self.weights,
+                extra_count,
+                replacement=True,
+                generator=generator,
+            )
+            indices = torch.cat([base, extras])
+        else:
+            indices = base
+        order = torch.randperm(indices.numel(), generator=generator)
+        return iter(indices[order].tolist())
+
+    def __len__(self) -> int:
+        return self.num_samples
+
+
 def _lr_lambda(epoch: int, total_epochs: int, warmup_epochs: int) -> float:
     if warmup_epochs > 0 and epoch < warmup_epochs:
         return float(epoch + 1) / float(warmup_epochs)
@@ -115,21 +153,24 @@ def _resume_history(output_dir: Path, completed_epochs: int) -> list[Dict[str, o
 
 
 def _run_epoch(*, model, loader, device, optimizer, class_weights, num_classes, ce_weight, dice_weight,
-               exclude_background_from_dice, supported_min_gt_pixels, amp, grad_clip_norm, max_batches, desc) -> Dict[str, object]:
+               exclude_background_from_dice, supported_min_gt_pixels, amp, grad_clip_norm,
+               grad_accum_steps, max_batches, desc) -> Dict[str, object]:
     training = optimizer is not None
     model.train(training)
     confusion = torch.zeros((num_classes, num_classes), dtype=torch.int64, device=device)
     total_loss = total_ce = total_dice = 0.0
     batches = 0
     iterator = tqdm(loader, desc=desc, leave=False)
+    accumulation = max(1, int(grad_accum_steps))
+    effective_batches = min(len(loader), max_batches) if max_batches > 0 else len(loader)
+    if training:
+        optimizer.zero_grad(set_to_none=True)
     for batch_idx, batch in enumerate(iterator):
         if max_batches > 0 and batch_idx >= max_batches:
             break
         images = batch["image"].to(device, non_blocking=True)
         labels = batch["label"].to(device, non_blocking=True)
         output_size = (int(labels.shape[-2]), int(labels.shape[-1]))
-        if training:
-            optimizer.zero_grad(set_to_none=True)
         autocast_enabled = bool(amp and device.type == "cuda")
         with torch.set_grad_enabled(training):
             with torch.autocast(device_type=device.type,
@@ -142,10 +183,15 @@ def _run_epoch(*, model, loader, device, optimizer, class_weights, num_classes, 
                     exclude_background_from_dice=exclude_background_from_dice,
                 )
             if training:
-                loss.backward()
-                if grad_clip_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
-                optimizer.step()
+                group_start = (batch_idx // accumulation) * accumulation
+                group_size = min(accumulation, effective_batches - group_start)
+                (loss / group_size).backward()
+                should_step = (batch_idx + 1) % accumulation == 0 or (batch_idx + 1) == effective_batches
+                if should_step:
+                    if grad_clip_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
         update_confusion_matrix(confusion, logits.detach(), labels, num_classes=num_classes)
         total_loss += float(loss.detach())
         total_ce += float(parts["ce"])
@@ -162,12 +208,13 @@ def _run_epoch(*, model, loader, device, optimizer, class_weights, num_classes, 
         "ce_loss": total_ce / max(batches, 1),
         "dice_loss": total_dice / max(batches, 1),
         "batches": batches,
+        "optimizer_steps": math.ceil(batches / accumulation) if training else 0,
     })
     return metrics
 
 
 def _save_checkpoint(path: Path, *, model, optimizer, scheduler, epoch, config, class_weights,
-                     val_metrics, best_score) -> None:
+                     val_metrics, best_score, early_stopping_bad_epochs) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({
         "epoch": int(epoch),
@@ -181,6 +228,7 @@ def _save_checkpoint(path: Path, *, model, optimizer, scheduler, epoch, config, 
         "training_config": config,
         "val_metrics": val_metrics,
         "best_score": float(best_score),
+        "early_stopping_bad_epochs": int(early_stopping_bad_epochs),
     }, path)
 
 
@@ -245,6 +293,7 @@ def main() -> int:
         tiles_root=data_cfg["tiles_root"], splits_csv=data_cfg["splits_csv"], split=train_split,
         encoder_size=encoder_size, augment=True, seed=seed,
         augmentation_strength=float(aug_cfg.get("strength", 1.0)),
+        augmentation_config=aug_cfg,
     )
     val_ds = HistosegSimulationTileDataset(
         tiles_root=data_cfg["tiles_root"], splits_csv=data_cfg["splits_csv"], split=val_split,
@@ -275,15 +324,19 @@ def main() -> int:
             min_class_pixels_in_tile=int(sampling_cfg.get("min_class_pixels_in_tile", 64)),
             max_tile_weight=float(sampling_cfg.get("max_tile_weight", 4.0)),
         )
-        num_samples = max(1, int(round(len(train_ds) * float(sampling_cfg.get("epoch_multiplier", 1.0)))))
-        sampler = WeightedRandomSampler(
-            weights=sample_weights,
-            num_samples=num_samples,
-            replacement=True,
-            generator=torch.Generator().manual_seed(seed + 101),
-        )
+        num_samples = max(len(train_ds), int(round(len(train_ds) * float(sampling_cfg.get("epoch_multiplier", 1.0)))))
+        full_coverage = bool(sampling_cfg.get("full_coverage", False))
+        if full_coverage:
+            sampler = FullCoverageWeightedSampler(sample_weights, num_samples=num_samples, seed=seed + 101)
+        else:
+            sampler = WeightedRandomSampler(
+                weights=sample_weights,
+                num_samples=num_samples,
+                replacement=True,
+                generator=torch.Generator().manual_seed(seed + 101),
+            )
         print(
-            "Rare-class sampler: "
+            f"Rare-class sampler ({'full coverage + weighted extras' if full_coverage else 'weighted replacement'}): "
             f"num_samples={num_samples}, weight[min/mean/max]="
             f"{float(sample_weights.min()):.3f}/{float(sample_weights.mean()):.3f}/{float(sample_weights.max()):.3f}"
         )
@@ -346,7 +399,12 @@ def main() -> int:
     ]
     best_score = max(historical_scores, default=float(resume_checkpoint.get("best_score", -float("inf")))
                      if resume_checkpoint is not None else -float("inf"))
+    early_stopping_patience = int(train_cfg.get("early_stopping_patience", 0))
+    early_stopping_min_delta = float(train_cfg.get("early_stopping_min_delta", 0.0))
+    bad_epochs = int(resume_checkpoint.get("early_stopping_bad_epochs", 0)) if resume_checkpoint is not None else 0
     for epoch in range(start_epoch, epochs):
+        if hasattr(sampler, "set_epoch"):
+            sampler.set_epoch(epoch)
         if epoch == freeze_encoder_epochs and freeze_encoder_epochs > 0:
             model.set_encoder_trainable(True)
             print(f"Epoch {epoch + 1}: unfroze SAM2.1 Hiera image encoder")
@@ -358,6 +416,7 @@ def main() -> int:
             exclude_background_from_dice=bool(train_cfg.get("exclude_background_from_dice", True)),
             supported_min_gt_pixels=supported_min_gt_pixels,
             amp=bool(train_cfg.get("amp", True)), grad_clip_norm=float(train_cfg.get("grad_clip_norm", 1.0)),
+            grad_accum_steps=int(train_cfg.get("grad_accum_steps", 1)),
             max_batches=int(args.max_train_batches), desc=f"train {epoch + 1}/{epochs}",
         )
         with torch.no_grad():
@@ -369,6 +428,7 @@ def main() -> int:
                 exclude_background_from_dice=bool(train_cfg.get("exclude_background_from_dice", True)),
                 supported_min_gt_pixels=supported_min_gt_pixels,
                 amp=bool(train_cfg.get("amp", True)), grad_clip_norm=0.0,
+                grad_accum_steps=1,
                 max_batches=int(args.max_val_batches), desc=f"val   {epoch + 1}/{epochs}",
             )
         scheduler.step()
@@ -388,15 +448,27 @@ def main() -> int:
             f"present={val_metrics['macro_dice_present']:.4f} fixed={val_metrics['macro_dice_fixed']:.4f} "
             f"supported={val_metrics['macro_dice_supported']:.4f} select({checkpoint_metric})={score:.4f}"
         )
-        improved = score > best_score
-        best_score = max(best_score, score)
+        improved = score > best_score + early_stopping_min_delta
+        if improved:
+            best_score = score
+            bad_epochs = 0
+        else:
+            bad_epochs += 1
         _save_checkpoint(output_dir / "last.pt", model=model, optimizer=optimizer, scheduler=scheduler,
-                         epoch=epoch + 1, config=config, class_weights=class_weights,
-                         val_metrics=val_metrics, best_score=best_score)
+                          epoch=epoch + 1, config=config, class_weights=class_weights,
+                          val_metrics=val_metrics, best_score=best_score,
+                          early_stopping_bad_epochs=bad_epochs)
         if improved:
             _save_checkpoint(output_dir / "best.pt", model=model, optimizer=optimizer, scheduler=scheduler,
-                             epoch=epoch + 1, config=config, class_weights=class_weights,
-                             val_metrics=val_metrics, best_score=best_score)
+                              epoch=epoch + 1, config=config, class_weights=class_weights,
+                              val_metrics=val_metrics, best_score=best_score,
+                              early_stopping_bad_epochs=bad_epochs)
+        if early_stopping_patience > 0 and bad_epochs >= early_stopping_patience:
+            print(
+                f"Early stopping after {bad_epochs} epochs without a "
+                f"{early_stopping_min_delta:g} improvement"
+            )
+            break
 
     print(f"Best validation {checkpoint_metric}: {best_score:.4f}")
     print(f"Checkpoints: {output_dir / 'best.pt'} and {output_dir / 'last.pt'}")

@@ -10,8 +10,11 @@ from typing import Dict, List
 
 import numpy as np
 import torch
-from PIL import Image, ImageEnhance
+import torchvision.transforms as T
+import torchvision.transforms.functional as TF
+from PIL import Image, ImageEnhance, ImageOps
 from torch.utils.data import Dataset
+from torchvision.transforms import InterpolationMode
 
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -59,11 +62,98 @@ def _jitter_rgb(image: Image.Image, rng: random.Random, strength: float) -> Imag
     return Image.fromarray(arr, mode="RGB")
 
 
+def _color_jitter(image: Image.Image, rng: random.Random, *, brightness: float,
+                  contrast: float, saturation: float) -> Image.Image:
+    operations = [
+        lambda value: ImageEnhance.Brightness(value).enhance(rng.uniform(1.0 - brightness, 1.0 + brightness)),
+        lambda value: ImageEnhance.Contrast(value).enhance(rng.uniform(1.0 - contrast, 1.0 + contrast)),
+        lambda value: ImageEnhance.Color(value).enhance(rng.uniform(1.0 - saturation, 1.0 + saturation)),
+    ]
+    rng.shuffle(operations)
+    for operation in operations:
+        image = operation(image)
+    return image
+
+
+def _sam2_finetune_augment(image: Image.Image, labels: np.ndarray, rng: random.Random,
+                           config: Dict[str, object]) -> tuple[Image.Image, np.ndarray]:
+    """Adapt Meta's paired SAM2 transforms to a single semantic tile."""
+    if rng.random() < float(config.get("horizontal_flip_prob", 0.5)):
+        image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        labels = np.ascontiguousarray(np.fliplr(labels))
+
+    if rng.random() < float(config.get("affine_probability", 1.0)):
+        degrees = float(config.get("affine_degrees", 25.0))
+        shear = float(config.get("affine_shear", 20.0))
+        translate = float(config.get("affine_translate", 0.0))
+        scale_min = float(config.get("scale_min", 1.0))
+        scale_max = float(config.get("scale_max", 1.0))
+        angle, translations, scale, shear_values = T.RandomAffine.get_params(
+            degrees=(-degrees, degrees),
+            translate=(translate, translate),
+            scale_ranges=(scale_min, scale_max),
+            shears=(-shear, shear),
+            img_size=image.size,
+        )
+        fill = tuple(int(value) for value in config.get("image_fill", [123, 116, 103]))
+        image = TF.affine(
+            image,
+            angle=angle,
+            translate=translations,
+            scale=scale,
+            shear=shear_values,
+            interpolation=InterpolationMode.BILINEAR,
+            fill=fill,
+        )
+        label_image = Image.fromarray(labels.astype(np.uint8), mode="L")
+        label_image = TF.affine(
+            label_image,
+            angle=angle,
+            translate=translations,
+            scale=scale,
+            shear=shear_values,
+            interpolation=InterpolationMode.NEAREST,
+            fill=0,
+        )
+        labels = np.asarray(label_image, dtype=np.int64)
+
+    image = _color_jitter(
+        image,
+        rng,
+        brightness=float(config.get("brightness", 0.1)),
+        contrast=float(config.get("contrast", 0.03)),
+        saturation=float(config.get("saturation", 0.03)),
+    )
+    image = _color_jitter(
+        image,
+        rng,
+        brightness=float(config.get("secondary_brightness", 0.1)),
+        contrast=float(config.get("secondary_contrast", 0.05)),
+        saturation=float(config.get("secondary_saturation", 0.05)),
+    )
+    if rng.random() < float(config.get("grayscale_prob", 0.05)):
+        image = ImageOps.grayscale(image).convert("RGB")
+
+    stain_strength = float(config.get("stain_strength", 0.0))
+    if stain_strength > 0:
+        arr = np.asarray(image, dtype=np.float32)
+        optical_density = -np.log((arr + 1.0) / 256.0)
+        gains = np.array(
+            [rng.uniform(1.0 - stain_strength, 1.0 + stain_strength) for _ in range(3)],
+            dtype=np.float32,
+        )
+        optical_density *= gains.reshape(1, 1, 3)
+        arr = np.clip(np.exp(-optical_density) * 256.0 - 1.0, 0.0, 255.0).astype(np.uint8)
+        image = Image.fromarray(arr, mode="RGB")
+    return image, np.ascontiguousarray(labels)
+
+
 class HistosegSimulationTileDataset(Dataset):
     """Aligned RGB + semantic label tiles from ``tiles_for_simulation``."""
 
     def __init__(self, *, tiles_root: str | Path, splits_csv: str | Path, split: str, encoder_size: int = 1024,
-                 augment: bool = False, seed: int = 42, augmentation_strength: float = 1.0) -> None:
+                 augment: bool = False, seed: int = 42, augmentation_strength: float = 1.0,
+                 augmentation_config: Dict[str, object] | None = None) -> None:
         self.tiles_root = Path(tiles_root).resolve()
         self.splits_csv = Path(splits_csv).resolve()
         self.split = split
@@ -71,6 +161,7 @@ class HistosegSimulationTileDataset(Dataset):
         self.augment = bool(augment)
         self.seed = int(seed)
         self.augmentation_strength = float(augmentation_strength)
+        self.augmentation_config = dict(augmentation_config or {})
         self.rows = load_split_rows(self.splits_csv, split)
         if self.encoder_size <= 0:
             raise ValueError("encoder_size must be > 0")
@@ -95,10 +186,13 @@ class HistosegSimulationTileDataset(Dataset):
             # Using the advancing worker RNG means repeated tiles receive fresh
             # transforms across epochs instead of index-locked augmentation.
             rng = random
-            if rng.random() < 0.5:
-                image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-                labels = np.ascontiguousarray(np.fliplr(labels))
-            image = _jitter_rgb(image, rng, self.augmentation_strength)
+            if self.augmentation_config.get("profile") == "sam2_finetune":
+                image, labels = _sam2_finetune_augment(image, labels, rng, self.augmentation_config)
+            else:
+                if rng.random() < 0.5:
+                    image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+                    labels = np.ascontiguousarray(np.fliplr(labels))
+                image = _jitter_rgb(image, rng, self.augmentation_strength)
         image = image.resize((self.encoder_size, self.encoder_size), Image.Resampling.BILINEAR)
         arr = np.asarray(image, dtype=np.float32) / 255.0
         arr = (arr - IMAGENET_MEAN) / IMAGENET_STD

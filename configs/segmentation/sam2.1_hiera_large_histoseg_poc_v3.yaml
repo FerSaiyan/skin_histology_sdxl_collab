@@ -1,0 +1,74 @@
+# Large-v3: full train-tile coverage, SAM2-style augmentation, and conservative fine-tuning.
+
+data:
+  tiles_root: data/artifacts/tiles_for_simulation
+  splits_csv: data/artifacts/tiles_for_simulation/segmentation_splits_v2.csv
+  train_split: train
+  val_split: val
+  encoder_size: 1024
+
+model:
+  num_classes: 12
+  sam2_model_id: facebook/sam2.1-hiera-large
+  sam2_config: configs/sam2.1/sam2.1_hiera_l.yaml
+  sam2_checkpoint: null
+  decoder_channels: 192
+
+training:
+  output_dir: outputs/segmentation/sam2.1_hiera_large_poc_v3
+  device: auto
+  seed: 42
+  epochs: 15
+  batch_size: 1
+  grad_accum_steps: 4
+  num_workers: 4
+  amp: true
+  freeze_encoder_epochs: 3
+  encoder_lr: 3.0e-6
+  decoder_lr: 5.0e-5
+  weight_decay: 0.1
+  warmup_epochs: 3
+  grad_clip_norm: 0.1
+  early_stopping_patience: 5
+  early_stopping_min_delta: 0.002
+  ce_weight: 1.0
+  dice_weight: 1.0
+  exclude_background_from_dice: true
+
+sampling:
+  enabled: true
+  full_coverage: true
+  rarity_power: 0.25
+  rare_strength: 1.5
+  min_class_pixels_in_tile: 64
+  max_tile_weight: 4.0
+  # Every one of the 928 train tiles appears once, plus 25% weighted extras.
+  epoch_multiplier: 1.25
+
+class_weighting:
+  power: 0.25
+  min_weight: 0.5
+  max_weight: 2.5
+
+augmentation:
+  profile: sam2_finetune
+  horizontal_flip_prob: 0.5
+  affine_probability: 1.0
+  affine_degrees: 25.0
+  affine_shear: 20.0
+  affine_translate: 0.05
+  scale_min: 0.85
+  scale_max: 1.15
+  image_fill: [123, 116, 103]
+  brightness: 0.10
+  contrast: 0.03
+  saturation: 0.03
+  grayscale_prob: 0.05
+  secondary_brightness: 0.10
+  secondary_contrast: 0.05
+  secondary_saturation: 0.05
+  stain_strength: 0.08
+
+metrics:
+  supported_min_gt_pixels: 1024
+  checkpoint_metric: macro_dice_supported

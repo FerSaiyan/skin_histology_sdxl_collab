@@ -290,19 +290,30 @@ python scripts/segmentation/train_sam2_hiera_semantic.py \
   --config configs/segmentation/sam2.1_hiera_large_histoseg_poc_v2.yaml
 ```
 
-Training writes `best.pt`, `last.pt`, and `history.json`. To continue a
-completed or interrupted run through epoch 15, resume from `last.pt` and set
-the new total epoch target:
+Large-v3 keeps that split but guarantees every training tile is visited in each
+epoch before weighted rare-class repeats. It also uses paired SAM2-style affine,
+zoom, color, and stain augmentation; gradient accumulation; and resumable early
+stopping:
 
 ```bash
 python scripts/segmentation/train_sam2_hiera_semantic.py \
-  --config configs/segmentation/sam2.1_hiera_large_histoseg_poc_v2.yaml \
-  --resume outputs/segmentation/sam2.1_hiera_large_poc_v2/last.pt \
-  --epochs 15
+  --config configs/segmentation/sam2.1_hiera_large_histoseg_poc_v3.yaml
+```
+
+Training writes `best.pt`, `last.pt`, and `history.json`. To continue a
+completed or interrupted v3 run through a higher epoch target, resume from
+`last.pt` and set the new total epoch target:
+
+```bash
+python scripts/segmentation/train_sam2_hiera_semantic.py \
+  --config configs/segmentation/sam2.1_hiera_large_histoseg_poc_v3.yaml \
+  --resume outputs/segmentation/sam2.1_hiera_large_poc_v3/last.pt \
+  --epochs 20
 ```
 
 The resume path restores model and optimizer state, preserves history, and
-recomputes the cosine schedule against the new total epoch target.
+recomputes the cosine schedule against the new total epoch target. Large-v3
+also restores its early-stopping patience counter.
 
 ---
 
