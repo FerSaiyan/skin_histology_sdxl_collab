@@ -349,6 +349,7 @@ def main() -> int:
 
                 used_mode = _link_image(rgb_path, image_out, args.link_mode)
                 link_modes_used[used_mode] += 1
+                mask_out.parent.mkdir(parents=True, exist_ok=True)
                 Image.fromarray((mask_bool.astype(np.uint8) * 255), mode="L").save(mask_out)
                 prompt = class_prompt(cid)
                 caption_out.write_text(prompt, encoding="utf-8")
